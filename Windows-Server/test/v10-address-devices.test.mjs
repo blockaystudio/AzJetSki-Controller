@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
+import {receiptBytes,drawerPulse,printerHost} from '../src/epson.mjs';
+const root=process.env.TEST_URL||'http://127.0.0.1:18990';let cookie='';
+async function call(uri,method='GET',body,expected=200,raw=false){const response=await fetch(root+uri,{method,headers:{cookie,'content-type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});assert.equal(response.status,expected,`${method} ${uri} status ${response.status} ${await response.clone().text()}`);return raw?response:await response.json();}
+let r=await fetch(root+'/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'owner',password:'Test-Owner-Password-2395!'})});assert.equal(r.status,200);cookie=r.headers.get('set-cookie').split(';')[0];
+const address={address_line1:'2024 W Sample Ave',address_line2:'Suite 10',city:'Phoenix',state:'AZ',postal_code:'85027'};
+await call('/api/pos/customers','POST',{name:'No Address'},400);
+const c=(await call('/api/pos/customers','POST',{name:'Test Phoenix Customer',phone:'602-555-0101',email:'example@example.com',...address,billing_same_as_service:true},201)).customer;
+assert.equal(c.address_line1,address.address_line1);assert.equal(c.billing_same_as_service,1);
+const byZIP=(await call('/api/pos/customers?q=85027')).customers;assert.equal(byZIP.length,1);
+const vehicle=(await call('/api/pos/vehicles','POST',{customer_id:c.id,make:'Can-Am',model:'X3',year:'2021',vin:'V10-X3-001'},201)).vehicle;
+const wo=(await call('/api/pos/work-orders','POST',{customer_id:c.id,vehicle_id:vehicle.id,ref_number:'V10-ADDR-001',complaint:'Diagnostic and belt service'},201));
+const tax=(await call('/api/pos/settings/tax'));assert.equal(tax.ratePercent,9.1);
+await call(`/api/pos/work-orders/${wo.id}/lines`,'POST',{line_type:'part',item_ref:'BELT',description:'Belt',qty:1,rate:100},201);
+await call(`/api/pos/work-orders/${wo.id}/lines`,'POST',{line_type:'labor',description:'Install belt',qty:1,rate:200},201);
+let w=(await call(`/api/work-orders/${wo.id}`)).workOrder;
+assert.equal(w.estimate_total,309.1);assert.equal(w.tax_total_cents,910);assert.equal(w.tax_rate_bps,910);
+const auth=await call(`/api/pos/work-orders/${wo.id}/docusign/preview`,'GET',undefined,200,true);const pdf=Buffer.from(await auth.arrayBuffer());assert.ok(pdf.includes(Buffer.from('2024 W Sample Ave')));
+const invo=await call(`/api/pos/work-orders/${wo.id}/invoices`,'POST',{email:'example@example.com',sendEmail:true},201);assert.equal(invo.deliveryStatus,'not_sent_email_provider_unconfigured');
+const invoicePath=new URL(invo.link).pathname;
+let invoiceHtml=await (await call(invoicePath,'GET',undefined,200,true)).text();assert.match(invoiceHtml,/2024 W Sample Ave/);assert.match(invoiceHtml,/85027/);
+await call(`/api/pos/customers/${c.id}`,'PATCH',{address_line1:'999 New Road',address_line2:'',city:'Tempe',state:'AZ',postal_code:'85281',billing_same_as_service:false,billing_address_line1:'PO Box 111',billing_address_line2:'',billing_city:'Scottsdale',billing_state:'AZ',billing_postal_code:'85250'});
+let changed=(await call(`/api/pos/customers/${c.id}`)).customer;assert.equal(changed.address_line1,'999 New Road');assert.equal(changed.billing_address_line1,'PO Box 111');
+invoiceHtml=await (await call(invoicePath,'GET',undefined,200,true)).text();assert.match(invoiceHtml,/2024 W Sample Ave/);assert.doesNotMatch(invoiceHtml,/999 New Road/);
+let deliveries=await call(`/api/pos/work-orders/${wo.id}/invoices`);assert.equal(deliveries.invoices.length,1);
+// A second invoice after changing billing address must contain a new, distinct immutable billing snapshot.
+const invo2=await call(`/api/pos/work-orders/${wo.id}/invoices`,'POST',{sendEmail:false},201);
+const invoice2=await (await call(new URL(invo2.link).pathname,'GET',undefined,200,true)).text();assert.match(invoice2,/PO Box 111/);assert.match(invoice2,/Scottsdale/);
+const v10db=new DatabaseSync(process.env.OWNERTRACKER_DB,{readOnly:true});const sent=v10db.prepare('SELECT status,provider FROM ot_invoice_deliveries WHERE invoice_id=?').get(invo.id);assert.equal(sent.status,'not_sent_email_provider_unconfigured');v10db.close();
+const bytes=receiptBytes({shop:'Arizona Jet Ski',phone:'602-482-9322',job:w,lines:[{description:'Belt',qty:1,rate:100,amount:100}],payments:[],taxRateBps:910,customerAddress:['2024 W Sample Ave','Phoenix AZ 85027']});assert.ok(bytes.includes(Buffer.from('2024 W Sample Ave')));assert.ok(bytes.includes(Buffer.from('Sales tax (9.10%)')));assert.ok(bytes.includes(Buffer.from('9.10')));assert.equal(bytes.subarray(-3).toString('hex'),'1d5600');assert.equal(drawerPulse({pin:0}).toString('hex'),'1b7000197d');assert.equal(printerHost(),null);
+await call(`/api/pos/devices/receipt/${wo.id}`,'POST',{},409);
+await call('/api/pos/devices/drawer/open','POST',{confirm:false,reason:'open on manager request'},400);
+const status=await call('/api/pos/devices/status');assert.equal(status.printerConfigured,false);
+console.log('PASS V10: address required; customer address CRUD / separate billing address; address & ZIP search; vehicle link; 9.1% tax itemization; DocuSign PDF address; invoice immutable snapshots; SMTP provider not faked; Epson receipt bytes & explicit drawer pulse; hardware disabled without printer.');

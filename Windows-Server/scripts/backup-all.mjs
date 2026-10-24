@@ -1,0 +1,12 @@
+import fs from 'node:fs';import path from 'node:path';
+import {loadEnv} from '../src/env.mjs';import {openDb} from '../src/db.mjs';
+loadEnv();
+const src=path.resolve(process.env.OWNERTRACKER_DB||'./data/ownertracker.sqlite');
+if(!fs.existsSync(src))throw new Error('Database does not exist');
+const destination=path.resolve('backups','ownertracker-'+new Date().toISOString().replace(/[:.]/g,'-'));
+fs.mkdirSync(destination,{recursive:true});
+const db=openDb(src);const destDb=path.join(destination,'ownertracker.sqlite');
+db.exec(`VACUUM INTO '${destDb.replaceAll("'","''")}'`);db.close();
+const photos=path.resolve('data/uploads');if(fs.existsSync(photos))fs.cpSync(photos,path.join(destination,'uploads'),{recursive:true});
+const manifest={createdAt:new Date().toISOString(),includes:['ownertracker.sqlite','uploads (if present)'],readme:'Restore only while server and desktop agent are stopped. Keep private and encrypted.'};
+fs.writeFileSync(path.join(destination,'manifest.json'),JSON.stringify(manifest,null,2));console.log(destination);

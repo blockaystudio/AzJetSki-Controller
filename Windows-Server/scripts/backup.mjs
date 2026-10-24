@@ -1,0 +1,2 @@
+import fs from 'node:fs'; import path from 'node:path'; import { loadEnv } from '../src/env.mjs'; import { openDb } from '../src/db.mjs'; loadEnv();
+const dbPath=process.env.OWNERTRACKER_DB||'./data/ownertracker.sqlite'; const outDir=path.join(path.dirname(path.resolve(dbPath)),'backups');fs.mkdirSync(outDir,{recursive:true});const stamp=new Date().toISOString().replace(/[:.]/g,'-');const out=path.join(outDir,`ownertracker-${stamp}.sqlite`);const db=openDb(dbPath);db.exec(`VACUUM INTO '${out.replaceAll("'","''")}'`);console.log(out);

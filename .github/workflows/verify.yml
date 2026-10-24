@@ -1,0 +1,35 @@
+name: Verify OwnerTracker
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regressions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm run check
+      - run: npm test
+
+  windows-launcher:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Compile launcher for Windows x64
+        working-directory: Windows-Server
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: go build -trimpath -o "$RUNNER_TEMP/OwnerTrackerDesktop.exe" windows/OwnerTrackerDesktop.go

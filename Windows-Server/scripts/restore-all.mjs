@@ -1,0 +1,14 @@
+import fs from 'node:fs';import path from 'node:path';import {DatabaseSync} from 'node:sqlite';import {loadEnv} from '../src/env.mjs';
+loadEnv();
+const source=process.argv[2];if(!source)throw new Error('Usage: node scripts/restore-all.mjs PATH_TO_BACKUP (stop server first)');
+const root=path.resolve(source),candidate=path.join(root,'ownertracker.sqlite');
+if(!fs.existsSync(candidate)||!fs.existsSync(path.join(root,'manifest.json')))throw new Error('Not an Owner Tracker full backup');
+const check=new DatabaseSync(candidate,{readOnly:true});const result=check.prepare('PRAGMA integrity_check').get();check.close();if(Object.values(result)[0]!=='ok')throw new Error('Backup database failed integrity check');
+const dest=path.resolve(process.env.OWNERTRACKER_DB||'./data/ownertracker.sqlite');
+fs.mkdirSync(path.dirname(dest),{recursive:true});
+const before=dest+'.before-restore-'+Date.now();
+if(fs.existsSync(dest))fs.copyFileSync(dest,before);
+const tmp=dest+'.restoring';fs.copyFileSync(candidate,tmp);fs.renameSync(tmp,dest);
+const photos=path.join(root,'uploads');if(fs.existsSync(photos))fs.cpSync(photos,path.resolve('data/uploads'),{recursive:true,force:true});
+console.log('RESTORED',dest,'previous DB copy:',fs.existsSync(before)?before:'new installation');
+console.log('Restart server, sign in and confirm customers, units, work orders and images.');

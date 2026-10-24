@@ -1,0 +1,39 @@
+name: OwnerTrackerSuite
+options:
+  bundleIdPrefix: com.azjetski.ownertracker
+  deploymentTarget:
+    iOS: '17.0'
+settings:
+  base:
+    SWIFT_VERSION: 5.9
+    TARGETED_DEVICE_FAMILY: '1,2'
+    CODE_SIGN_STYLE: Automatic
+targets:
+  OwnerTrackerOwner:
+    type: application
+    platform: iOS
+    sources:
+      - path: Shared
+      - path: OwnerApp
+    info:
+      path: OwnerApp/Info.plist
+      properties:
+        CFBundleDisplayName: Owner Tracker
+        UILaunchScreen: {}
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: false
+  OwnerTrackerTech:
+    type: application
+    platform: iOS
+    sources:
+      - path: Shared
+      - path: TechApp
+    info:
+      path: TechApp/Info.plist
+      properties:
+        CFBundleDisplayName: Owner Tech
+        UILaunchScreen: {}
+        NSPhotoLibraryUsageDescription: 'Photos are attached to assigned work orders and optional customer updates.'
+        NSCameraUsageDescription: 'Capture repair progress and inspection photos.'
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: false

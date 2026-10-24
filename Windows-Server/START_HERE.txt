@@ -1,0 +1,25 @@
+OWNER TRACKER V10 — POS / OWNER / TECHNICIAN SUITE
+
+Windows 10/11 64-bit required; install Node.js 22.16 or later in 22.x.
+First time: extract ALL files into C:\OwnerTracker, then run:
+    windows\SETUP_FIRST.cmd
+    OwnerTrackerDesktop.exe
+
+Desktop: http://127.0.0.1:8787
+Owner (local only until secure HTTPS): http://127.0.0.1:8787/owner.html
+Technician (local only until secure HTTPS): http://127.0.0.1:8787/tech.html
+Invoices and DocuSign: http://127.0.0.1:8787/billing.html
+
+Customer street, city, state, ZIP required for new customer; separate billing optional.
+Shop's requested DEFAULT tax rate is 9.1% on taxable item lines; confirm with accountant before collecting.
+Cash, external-approved Dejavoo card and verified Zelle recorded; split payments supported.
+Dejavoo LIVE terminal charges & hosted payment links require merchant integration, NOT CONNECTED.
+Epson printing requires compatible Ethernet ESC/POS printer, drawer and LAN configuration.
+Emailing invoices requires public HTTPS + SMTP or SendGrid credentials; NOT CONFIGURED.
+DocuSign PDFs prepared; independent app OAuth and approved forms required for live send.
+Parts ETAs show ONLY when provided by a vendor or entered by staff.
+Supplier thresholds WSM $100, Parts Unlimited $0, TMS $0, BRP $250;
+Carts may be queued for desktop verification; LIVE ORDERING DISABLED.
+
+See START_HERE_V10.md and INTEGRATIONS_V10.md for setup details.
+DO NOT load real card numbers or supplier passwords in the app source, browser or chat.

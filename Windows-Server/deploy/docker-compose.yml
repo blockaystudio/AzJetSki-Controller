@@ -1,0 +1,16 @@
+services:
+  ownertracker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      # Listen inside the container; the published host port stays local.
+      HOST: 0.0.0.0
+      PORT: 8787
+      OWNERTRACKER_DB: /app/data/ownertracker.sqlite
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - ../data:/app/data

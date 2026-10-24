@@ -1,0 +1,12 @@
+.env
+data/*.sqlite
+data/*.sqlite-*
+data/backups/
+bridge/bridge.config.json
+bridge/bridge.state.json
+bridge/bridge.log
+bridge/last-*.xml
+bridge/qbpos-servers.xml
+bridge/bin/
+bridge/obj/
+bridge/*.exe

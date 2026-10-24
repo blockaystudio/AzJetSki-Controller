@@ -1,0 +1,16 @@
+{
+  "name": "ownertracker",
+  "version": "11.0.0-dev",
+  "private": true,
+  "engines": {
+    "node": ">=22.16.0 <23"
+  },
+  "scripts": {
+    "setup": "npm --prefix Windows-Server run setup",
+    "start": "npm --prefix Windows-Server start",
+    "test": "npm --prefix Windows-Server test",
+    "check": "npm --prefix Windows-Server run check",
+    "desktop-agent": "npm --prefix Windows-Server run desktop-agent",
+    "backup": "npm --prefix Windows-Server run backup"
+  }
+}

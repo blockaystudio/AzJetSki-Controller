@@ -1,0 +1,419 @@
+{
+  "schema_version": 1,
+  "normalization": "Remove OwnerTracker-V11/ prefix from Complete Suite; Windows POS paths are already normalized.",
+  "comparison": "Both normalized archives have identical paths and bytes for all 80 files.",
+  "archives": [
+    {
+      "filename": "1-OwnerTracker-V11-Complete-Suite.zip",
+      "sha256": "09c16a4dfc93918b9ac771cfefcfb0101537475fdf6daad2d9c88102e949702d",
+      "file_count": 80
+    },
+    {
+      "filename": "2-OwnerTracker-V11-Windows-POS.zip",
+      "sha256": "6c1ed95daea042e4b0512d4b5f3c89005801a22c77e5eee8ec0d3ece017233f4",
+      "file_count": 80
+    }
+  ],
+  "original_files": [
+    {
+      "path": "LONG_TERM_IMPLEMENTATION_PLAN.md",
+      "sha256": "b9acc4bb7bf42d0bb7e71a723683f0d99461ed8b6196e89601e655667441974d",
+      "bytes": 15649
+    },
+    {
+      "path": "QA_AND_ACCEPTANCE.md",
+      "sha256": "520c595084c1626a2b510f8fbce8a9ac3fe8fc173fb8833b92e73eeb580aba2b",
+      "bytes": 3518
+    },
+    {
+      "path": "RELEASE_NOTES.md",
+      "sha256": "7161fdff750c53be194043866ef4a19e5bba1d6163e6a90eeec4148b45d945fc",
+      "bytes": 1238
+    },
+    {
+      "path": "START_HERE.md",
+      "sha256": "f778b53ea67418b91bffb472cd1b03557c558c831b22e8a323e37cb9e2fdd56a",
+      "bytes": 4454
+    },
+    {
+      "path": "Windows-Server/.env.example",
+      "sha256": "2b82c0562010b94352df70a33a915d80176896b3e7c45c1884c473ddcc503225",
+      "bytes": 2506
+    },
+    {
+      "path": "Windows-Server/.gitignore",
+      "sha256": "cfc7145233dca777883768725a86ce5a4bebfc612cfe5d0707b35bf8fd2d068f",
+      "bytes": 198
+    },
+    {
+      "path": "Windows-Server/IMPLEMENTATION_PLAN_V11.md",
+      "sha256": "b9acc4bb7bf42d0bb7e71a723683f0d99461ed8b6196e89601e655667441974d",
+      "bytes": 15649
+    },
+    {
+      "path": "Windows-Server/INTEGRATIONS_V10.md",
+      "sha256": "9cf971df7bca9a9f4ec49a9567192b41716e8c68578c309d722a5810028a0c83",
+      "bytes": 4321
+    },
+    {
+      "path": "Windows-Server/OWNER_QA_V10.md",
+      "sha256": "8fd1b5c2d2498940462102839dac3f030a558d5494927e7b03925ee72cd27df7",
+      "bytes": 4424
+    },
+    {
+      "path": "Windows-Server/OwnerTrackerDesktop.exe",
+      "sha256": "9c547531c79c349eb373baca4bde4c89e3afb9429407b0b2fdd02f141aaed549",
+      "bytes": 1879552
+    },
+    {
+      "path": "Windows-Server/QA_AND_ACCEPTANCE_V11.md",
+      "sha256": "520c595084c1626a2b510f8fbce8a9ac3fe8fc173fb8833b92e73eeb580aba2b",
+      "bytes": 3518
+    },
+    {
+      "path": "Windows-Server/QA_RESULTS_V10.md",
+      "sha256": "661616ac85e028a66ea302466ad848f5dee1d3d9fd2854e69ece4ba91a6e7c64",
+      "bytes": 1312
+    },
+    {
+      "path": "Windows-Server/README.md",
+      "sha256": "0e3dd4828f52fb745038a4d63d79211b727c9ddafe1fe0ef47b5b972b71b6780",
+      "bytes": 414
+    },
+    {
+      "path": "Windows-Server/RELEASE_NOTES_V11.md",
+      "sha256": "7161fdff750c53be194043866ef4a19e5bba1d6163e6a90eeec4148b45d945fc",
+      "bytes": 1238
+    },
+    {
+      "path": "Windows-Server/START_HERE.txt",
+      "sha256": "aa94535c83749dbe2b8f488a8a537be0f63942e47047d9bea3b004dac6a51412",
+      "bytes": 1496
+    },
+    {
+      "path": "Windows-Server/START_HERE_V10.md",
+      "sha256": "10c434408848f75d08536e0d91fdab5708b92de075d8ca8c968a607573491258",
+      "bytes": 5137
+    },
+    {
+      "path": "Windows-Server/START_HERE_V11.md",
+      "sha256": "f778b53ea67418b91bffb472cd1b03557c558c831b22e8a323e37cb9e2fdd56a",
+      "bytes": 4454
+    },
+    {
+      "path": "Windows-Server/backups/README.txt",
+      "sha256": "b7e3c92a0e4cb01e44819d7621292eb112d6d3c0668df813ea77f963e47a90f9",
+      "bytes": 109
+    },
+    {
+      "path": "Windows-Server/data/README.txt",
+      "sha256": "e7feba25768fbcbb36b7d18e141a74288de3c75e1aed89c15570513ad6fcd2e8",
+      "bytes": 126
+    },
+    {
+      "path": "Windows-Server/deploy/Dockerfile",
+      "sha256": "a96b66d8f10181f6d4cae7567f89c45e50771af0bad67503745763bc4cc6f15d",
+      "bytes": 278
+    },
+    {
+      "path": "Windows-Server/deploy/docker-compose.yml",
+      "sha256": "1efd1969cb24342752c2cb9e4653bdd9b25dd66c173ee3d40f55eed8a062aa50",
+      "bytes": 211
+    },
+    {
+      "path": "Windows-Server/docs/ORDER_COMMAND_SCHEMA.md",
+      "sha256": "f22ed10704195ce6f5a044564a92955dd00c463f7b91131acb78f7fc7825b7ba",
+      "bytes": 1946
+    },
+    {
+      "path": "Windows-Server/docs/V6_NEXT_STEPS.md",
+      "sha256": "3c6841667a8f3e46d7d1fabe3df04102c0832ebf3660d8f94398b79baf59f0a2",
+      "bytes": 3698
+    },
+    {
+      "path": "Windows-Server/ios/OwnerApp/OwnerApp.swift",
+      "sha256": "1161cb06b9af2d63c73b430e2c6c546655cbdd08e158af4bada038f5043b44be",
+      "bytes": 7041
+    },
+    {
+      "path": "Windows-Server/ios/Shared/OwnerAPI.swift",
+      "sha256": "caa01c08c39d7864b0755a1484b796ffb2fd7f1b04b107d5619d7fd24416a146",
+      "bytes": 4151
+    },
+    {
+      "path": "Windows-Server/ios/TechApp/TechApp.swift",
+      "sha256": "6f82132c31f3fd46c62b3cac704936b4f272713906a80bff304f674ba8285014",
+      "bytes": 6215
+    },
+    {
+      "path": "Windows-Server/ios/project.yml",
+      "sha256": "67ebcf24501c18ea7bbfa3df7ac3b9708b0b9284b595689973d5d5cf316d1051",
+      "bytes": 1062
+    },
+    {
+      "path": "Windows-Server/package.json",
+      "sha256": "d856bfc3a0bdbe39e6a2cee2e5e61f4f6ba46479f54423e34bd0d55c579a9384",
+      "bytes": 444
+    },
+    {
+      "path": "Windows-Server/public/app.js",
+      "sha256": "1ad4154c7e990081d77c25cd83577503d34e64f650ddc7b027c89145a059bc68",
+      "bytes": 51821
+    },
+    {
+      "path": "Windows-Server/public/billing.html",
+      "sha256": "40c50bf2fa04efe8594feaee6f49fcb4d4a6aaf66c68cb1240c5c3ccef71c2fd",
+      "bytes": 5564
+    },
+    {
+      "path": "Windows-Server/public/billing.js",
+      "sha256": "fcf7ec8e45595d28f9fe409b42d26fd7951c946729b9f2c72e259187c5f1b0d2",
+      "bytes": 6336
+    },
+    {
+      "path": "Windows-Server/public/brand-logo.png",
+      "sha256": "edb30499d9242583ffc60727b2b2da1990fdba2280d564734de2c90f8c84a27e",
+      "bytes": 2145883
+    },
+    {
+      "path": "Windows-Server/public/index.html",
+      "sha256": "85efeceb5a06c2b752df5a42de55cef7947a131fc580d61e7f9ede92c6d6b8c1",
+      "bytes": 341
+    },
+    {
+      "path": "Windows-Server/public/mobile-base.js",
+      "sha256": "3e60d6799869579613afcfff83f7a848183e577c2cdb53b91aad9990250c5f7a",
+      "bytes": 1646
+    },
+    {
+      "path": "Windows-Server/public/mobile.css",
+      "sha256": "624041e6e4daae7ac2accfe9dd3479a6bec68e96f3c8c98d1885d97f0cbe78e5",
+      "bytes": 2741
+    },
+    {
+      "path": "Windows-Server/public/owner-mobile.js",
+      "sha256": "d970870c97f59b050a1cb96f3e152bd9fb117bd3f90e0d79275436980aff2881",
+      "bytes": 7115
+    },
+    {
+      "path": "Windows-Server/public/owner.html",
+      "sha256": "ecc8048d610ab5d8a0200defdc8538ee7aa2d9fb09aad9adc344a783418bb5ac",
+      "bytes": 586
+    },
+    {
+      "path": "Windows-Server/public/owner.webmanifest",
+      "sha256": "38b94ff6e0768405b3b54cc18374f0097946395067dcfbb78ef59f68ab274ea3",
+      "bytes": 174
+    },
+    {
+      "path": "Windows-Server/public/shop-ops.html",
+      "sha256": "b1073d8526955ff128fc91a583fb666d93650b9cc7fc0ca3c89f4693927baa4d",
+      "bytes": 2755
+    },
+    {
+      "path": "Windows-Server/public/shop-ops.js",
+      "sha256": "349a8b87b0fefb15ec62347eed667b35dfdfa3e387468ea5844ed88ba7efc915",
+      "bytes": 31234
+    },
+    {
+      "path": "Windows-Server/public/styles.css",
+      "sha256": "6d40842316f890db55beb0b019e36e54fe1ab2fac886c49de43c960010557871",
+      "bytes": 9606
+    },
+    {
+      "path": "Windows-Server/public/tech-mobile.js",
+      "sha256": "5d208ca35d1d4adbca9c01c647c2d91ad8a1af204e8078ab1e6ced998ac4a261",
+      "bytes": 6095
+    },
+    {
+      "path": "Windows-Server/public/tech.html",
+      "sha256": "4a28ddfaafe3c5945b4e47d1c185057d8b098ed567f3f398fb6bfbac1ee7b87f",
+      "bytes": 586
+    },
+    {
+      "path": "Windows-Server/public/tech.webmanifest",
+      "sha256": "63e0866f302a65c8b45cbc86afa052863d45d67b8aaa86bec69cd6ebc2a0cea5",
+      "bytes": 167
+    },
+    {
+      "path": "Windows-Server/runtime/README.txt",
+      "sha256": "712506aee27f787c4d815f0e24e21b745988abee96e3a2a7e6de70749a6e1c89",
+      "bytes": 87
+    },
+    {
+      "path": "Windows-Server/scripts/backup-all.mjs",
+      "sha256": "c9d40bc6791d69add2205f2dd05fbe3c2242637f34b8a9fd44f66afbf4407223",
+      "bytes": 1044
+    },
+    {
+      "path": "Windows-Server/scripts/backup.mjs",
+      "sha256": "63e753af22ebd0af00eadd4bd0d889c692d7a04301b2c783dab362491ac38321",
+      "bytes": 540
+    },
+    {
+      "path": "Windows-Server/scripts/desktop-agent.mjs",
+      "sha256": "6278a1e6ae188543744779014d8489c5f830b7978b80e9700fdf37e2289180f8",
+      "bytes": 3457
+    },
+    {
+      "path": "Windows-Server/scripts/restore-all.mjs",
+      "sha256": "2f8afe94aab8e3f6311cdcd0af2dd90351e6cbc54223511e39e83f65229659cb",
+      "bytes": 1365
+    },
+    {
+      "path": "Windows-Server/scripts/seed-demo.mjs",
+      "sha256": "699663c754377a93436c39e31e905588e61b136e549977d8585e7e93a0275b29",
+      "bytes": 3305
+    },
+    {
+      "path": "Windows-Server/scripts/setup.mjs",
+      "sha256": "0da4c513690bf264d6fb9550a1f87aaf8bcebe052c73f269266c978d39a4749c",
+      "bytes": 1577
+    },
+    {
+      "path": "Windows-Server/src/db.mjs",
+      "sha256": "4ac9f683210ca9cf45f9c38cf638908ee25c2571f966fc6068e454c56d6b1347",
+      "bytes": 12541
+    },
+    {
+      "path": "Windows-Server/src/env.mjs",
+      "sha256": "7d15717edcc697dbae7f1c4c24c68b3d2b51e4747c1e31fe94ccfebd30608d10",
+      "bytes": 645
+    },
+    {
+      "path": "Windows-Server/src/epson.mjs",
+      "sha256": "2c65d66bde18c3473c80cf84b1ebf821fb31509fcd0f72206057c720c50693ea",
+      "bytes": 3312
+    },
+    {
+      "path": "Windows-Server/src/google-calendar.mjs",
+      "sha256": "1c9b2ee3f383a9b5fb2c95a78a4a2403e3728e4b7018d62fa6bee9bf9f4c4e90",
+      "bytes": 8098
+    },
+    {
+      "path": "Windows-Server/src/payment-docs.mjs",
+      "sha256": "3d5c8b11593e873597c225d03515f82f41ff2b4fee62177a5fc869f46710137d",
+      "bytes": 26317
+    },
+    {
+      "path": "Windows-Server/src/pos-devices.mjs",
+      "sha256": "44ef0bad11f621ac83ac607b38a0989558deee8b04bc1cc94ac5c92f1fd19101",
+      "bytes": 4098
+    },
+    {
+      "path": "Windows-Server/src/pos-extension.mjs",
+      "sha256": "c1311edec023ef9e30e1dcfb976cdc2eb09ec06f994a1e17cc7933668e39e4e1",
+      "bytes": 39588
+    },
+    {
+      "path": "Windows-Server/src/server.mjs",
+      "sha256": "a08f525c5b22996b15a924c21802151b1a518d4e27c26de8fdfd5df655d925c8",
+      "bytes": 65717
+    },
+    {
+      "path": "Windows-Server/src/shop-mail.mjs",
+      "sha256": "50227519076d2673294f17959db36d3aa8851129c326fd16d32621a2c17af68c",
+      "bytes": 2943
+    },
+    {
+      "path": "Windows-Server/src/shop-ops.mjs",
+      "sha256": "ceea88828b12231ce215232006b95f16ae772320d1b091065c52496b0bfcff0b",
+      "bytes": 40298
+    },
+    {
+      "path": "Windows-Server/src/tax.mjs",
+      "sha256": "1ace3871a97c7ec661a373de0401047f72b07dc9d5f1cbd0a31fa8f7ecaa1368",
+      "bytes": 3526
+    },
+    {
+      "path": "Windows-Server/test/billing-v9.test.mjs",
+      "sha256": "778cab80354a2a5100332688362e621bbf038a41ee46cce60349b58a26111954",
+      "bytes": 4927
+    },
+    {
+      "path": "Windows-Server/test/browser-v11-static.py",
+      "sha256": "bf3ad5c75bf3cf10b99ad7d2a31be4c7c7f72e123cdc41737debee5a19c8770f",
+      "bytes": 4059
+    },
+    {
+      "path": "Windows-Server/test/browser-v11.py",
+      "sha256": "754f6341678daaf5d612acefcbe20cfe21e270f28840f73ef0f53d35b73e1f5a",
+      "bytes": 3621
+    },
+    {
+      "path": "Windows-Server/test/create-agent-command.mjs",
+      "sha256": "393ca323dd775b715d9da904aa44a8ff7755a0acf646aa9d0d4de6c089bf6884",
+      "bytes": 774
+    },
+    {
+      "path": "Windows-Server/test/db.test.mjs",
+      "sha256": "10031d03d8c00d6bd36515f8a2bcefa87a877f34119ca43c81e39bb4c4bfaf05",
+      "bytes": 1427
+    },
+    {
+      "path": "Windows-Server/test/integration-pos.test.mjs",
+      "sha256": "627f28e88532dc3614fb2cf6fe4f99100bcfd61f35561de5fac45beff59283e4",
+      "bytes": 6969
+    },
+    {
+      "path": "Windows-Server/test/payments-v8.test.mjs",
+      "sha256": "ae1299d6a3b550f297ffdac265cc48a1a972fe6a8008a37153a1d94d0a3972b2",
+      "bytes": 3255
+    },
+    {
+      "path": "Windows-Server/test/run-billing-v9.sh",
+      "sha256": "fa3c89cb572785c4f7157b179b58d0d63d69dd63fa62e4a70c439241bfb733c2",
+      "bytes": 735
+    },
+    {
+      "path": "Windows-Server/test/run-v10.sh",
+      "sha256": "20343ca1043f121ff01de473cf6e371f0712c233d9ccfc2378385b9767d4663d",
+      "bytes": 824
+    },
+    {
+      "path": "Windows-Server/test/run-v11.sh",
+      "sha256": "9b6faadc5aad84b59b162bf318c457dee163dc8e47636ebe47031bbc6d3c09d8",
+      "bytes": 713
+    },
+    {
+      "path": "Windows-Server/test/run-v6.sh",
+      "sha256": "aeaf70a6fe13cc8aacd7e8154071c1793620125c59c328c587e4490f804a6f84",
+      "bytes": 1855
+    },
+    {
+      "path": "Windows-Server/test/thresholds.test.mjs",
+      "sha256": "9bc9036d3c69b4346b411196fecc173529324298f3eea1c94488031eae576901",
+      "bytes": 1963
+    },
+    {
+      "path": "Windows-Server/test/v10-address-devices.test.mjs",
+      "sha256": "3ec6c11e9c58a6a23317c60dadb52c0325c037aaa567a480c35964260f2bef76",
+      "bytes": 5341
+    },
+    {
+      "path": "Windows-Server/test/v11-shop-ops.test.mjs",
+      "sha256": "25c224410ce8673f1354bf12d2b577b9497502de8cf68c5405d681fd6c18d88f",
+      "bytes": 9668
+    },
+    {
+      "path": "Windows-Server/windows/BACKUP_NOW.cmd",
+      "sha256": "c6655f7c1503a39df38ed5285db90ab89af6c3f41e078735e983dca823a7fff4",
+      "bytes": 147
+    },
+    {
+      "path": "Windows-Server/windows/ORDER_AGENT_TEST.cmd",
+      "sha256": "1b6ea8a99710ac252b8d447dc7284983ec01875d3eaebbbfcc61e8068c0fcee7",
+      "bytes": 157
+    },
+    {
+      "path": "Windows-Server/windows/OwnerTrackerDesktop.go",
+      "sha256": "58a16b45c094d03e2999737876754cd2dc81b157465a8084ab972bf541742834",
+      "bytes": 2254
+    },
+    {
+      "path": "Windows-Server/windows/SETUP_FIRST.cmd",
+      "sha256": "d30d020e5c08e2c63b339f60ee4a5d4c576417f231ae60527971de7bbaa86f69",
+      "bytes": 142
+    }
+  ]
+}

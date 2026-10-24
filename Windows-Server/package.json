@@ -1,0 +1,18 @@
+{
+  "name": "ownertracker-v11-pos-suite",
+  "version": "11.0.0-dev",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.16.0 <23"
+  },
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "start": "node src/server.mjs",
+    "desktop-agent": "node scripts/desktop-agent.mjs",
+    "backup": "node scripts/backup-all.mjs",
+    "test": "node test/run-suite.mjs",
+    "check": "node test/run-suite.mjs --syntax-only",
+    "demo": "node scripts/seed-demo.mjs"
+  }
+}

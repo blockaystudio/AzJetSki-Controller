@@ -1,0 +1,33 @@
+# Private configuration. Keep only the documented template in source control.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Customer databases, photos, order manifests, backups, and bundled runtimes.
+# Preserve the package's directory instructions, without committing live data.
+**/data/*
+!**/data/README.txt
+**/backups/*
+!**/backups/README.txt
+**/runtime/*
+!**/runtime/README.txt
+*.sqlite
+*.sqlite-*
+*.sqlite.*
+*.db
+*.db-*
+*.before-restore-*
+*.restoring
+*.log
+
+# Local tooling and generated Xcode projects.
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+DerivedData/
+*.xcuserstate
+xcuserdata/
