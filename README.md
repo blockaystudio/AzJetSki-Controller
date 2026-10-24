@@ -41,7 +41,14 @@ npm test
 
 `npm test` requires **Bash** (Linux, macOS, or Git Bash/WSL on Windows). It runs in a disposable copy with a clean environment, so local credentials, shop databases, uploads and backups are not used. V6/V8, V9, V10 and V11 tests cover repair POS, payments, billing, addresses/devices, custody, retail parts, inventory, permissions and scheduling, including backup/restore and the non-purchasing desktop manifest. GitHub Actions runs the same checks on Node 22.
 
-`npm run desktop-agent` starts the manifest receiver when running the server without the Windows launcher. `npm run backup` creates a private full database/photo backup. Restore instructions and upgrade precautions are in the V11 guide; stop the server and agent before restoring.
+`npm run desktop-agent` starts the manifest receiver when running the server without the Windows launcher. `npm run backup` creates a private full database/photo backup. Follow the V11 upgrade precautions and restore-test in a copied development installation first. With the server and desktop agent stopped, restore a full backup using:
+
+```sh
+cd Windows-Server
+node scripts/restore-all.mjs PATH_TO_BACKUP
+```
+
+Use the backup directory containing `manifest.json` and `ownertracker.sqlite`. Restart and verify customers, vehicles, work orders and photos. Protect `.env` separately; database/photo backups do not include credentials.
 
 Optional Docker: generate `Windows-Server/.env` with setup, then run `docker compose -f Windows-Server/deploy/docker-compose.yml up --build -d`. Compose publishes to localhost and persists `Windows-Server/data`; it starts the server only. The desktop agent can run separately. Docker execution has not been certified by this assembly.
 
