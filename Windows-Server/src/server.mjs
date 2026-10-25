@@ -9,6 +9,7 @@ import { posRoutes } from './pos-extension.mjs';
 import { checkoutRoutes } from './payment-docs.mjs';
 import { deviceRoutes } from './pos-devices.mjs';
 import { shopOpsRoutes } from './shop-ops.mjs';
+import { receiptRoutes } from './receipts.mjs';
 
 loadEnv();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -75,6 +76,7 @@ const posRouter=posRoutes({db,currentUser,json,readBody,bridgeToken:AGENT_TOKEN}
 const checkoutRouter=checkoutRoutes({db,currentUser,json,readBody,publicBaseUrl:PUBLIC_BASE_URL,shopName:SHOP_NAME});
 const deviceRouter=deviceRoutes({db,currentUser,json,readBody,shopName:SHOP_NAME,shopPhone:SHOP_PHONE});
 const opsRouter=shopOpsRoutes({db,currentUser,json,readBody,bridgeToken:AGENT_TOKEN});
+const receiptsRouter=receiptRoutes({db,currentUser,json,shopName:SHOP_NAME,shopPhone:SHOP_PHONE});
 function canAccessJob(u,id) {
   if (!u) return false;
   if (u.role !== 'technician') return true;
@@ -283,6 +285,7 @@ const server=http.createServer(async(req,res)=>{
       const allowed=[new URL(PUBLIC_BASE_URL).origin,`${req.headers['x-forwarded-proto']==='https'?'https':'http'}://${req.headers.host}`];
       if(!allowed.includes(req.headers.origin))return json(res,403,{error:'Cross-origin mutation denied'});
     }
+    if(await receiptsRouter(req,res,p,url))return;
     if(await opsRouter(req,res,p,url))return;
     if(await deviceRouter(req,res,p,url))return;
     if(await checkoutRouter(req,res,p,url))return;

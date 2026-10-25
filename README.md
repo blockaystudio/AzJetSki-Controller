@@ -39,7 +39,7 @@ npm run check
 npm test
 ```
 
-`npm test` requires **Bash** (Linux, macOS, or Git Bash/WSL on Windows). It runs in a disposable copy with a clean environment, so local credentials, shop databases, uploads and backups are not used. V6/V8, V9, V10 and V11 tests cover repair POS, payments, billing, addresses/devices, custody, retail parts, inventory, permissions and scheduling, including backup/restore and the non-purchasing desktop manifest. GitHub Actions runs the same checks on Node 22.
+`npm test` requires **Bash** (Linux, macOS, or Git Bash/WSL on Windows). It runs in a disposable copy with a clean environment, so local credentials, shop databases, uploads and backups are not used. Tests cover financial permissions and audit records, receipt rendering, damaged backups and restore rollback, plus V6/V8, V9, V10 and V11 repair POS, payments, billing, devices, custody, retail parts, inventory and scheduling. GitHub Actions runs the same checks on Node 22, tests the launcher, and provides a Windows x64 launcher build artifact.
 
 `npm run desktop-agent` starts the manifest receiver when running the server without the Windows launcher. `npm run backup` creates a private full database/photo backup. Follow the V11 upgrade precautions and restore-test in a copied development installation first. With the server and desktop agent stopped, restore a full backup using:
 
@@ -48,11 +48,19 @@ cd Windows-Server
 node scripts/restore-all.mjs PATH_TO_BACKUP
 ```
 
-Use the backup directory containing `manifest.json` and `ownertracker.sqlite`. Restart and verify customers, vehicles, work orders and photos. Protect `.env` separately; database/photo backups do not include credentials.
+Use the backup directory containing `manifest.json` and `ownertracker.sqlite`. New backups include SHA-256 checksums for the database and complete photo set. Restore verifies them before making changes, replaces the photo set instead of mixing old files, and retains the previous database/photos in `data/ownertracker-before-restore-UUID` (beside a custom database path if configured). SQLite sidecars block restoration; stop both processes and do not manually delete a live database's sidecars. Original checksum-free V11 backups require the explicit `--allow-legacy` flag after checking their origin. Restart and verify customers, vehicles, work orders and photos. Protect `.env` separately; database/photo backups do not include credentials. Checksums detect corruption; store encrypted offsite copies for disaster recovery.
 
 Optional Docker: generate `Windows-Server/.env` with setup, then run `docker compose -f Windows-Server/deploy/docker-compose.yml up --build -d`. Compose publishes to localhost and persists `Windows-Server/data`; it starts the server only. The desktop agent can run separately. Docker execution has not been certified by this assembly.
 
-The original Go launcher source is `Windows-Server/windows/OwnerTrackerDesktop.go`. A separate CI job compiles it for Windows x64. The supplied executable is preserved; Windows hardware launch acceptance is still required. Native owner/tech iOS source lives under `Windows-Server/ios` with an XcodeGen `project.yml` (iOS 17+, Swift 5.9). Building/signing requires macOS, Xcode and an Apple developer configuration; signed apps are not included.
+The Go launcher source is `Windows-Server/windows/OwnerTrackerDesktop.go`. The rebuilt executable checks the Node version and private configuration, prevents duplicate startup, waits for server readiness, and stops both child processes on normal Ctrl+C shutdown. See [launcher instructions](Windows-Server/windows/README.md), including recovery after an interrupted shutdown. Windows hardware launch acceptance is still required. Native owner/tech iOS source lives under `Windows-Server/ios` with an XcodeGen `project.yml` (iOS 17+, Swift 5.9). Building/signing requires macOS, Xcode and an Apple developer configuration; signed apps are not included.
+
+## Financial controls and receipts
+
+The POS payment screen, billing screen and retail order details share refund/void controls. Only an owner or manager may record an externally completed refund, tied to its original payment with a reason and transaction reference. Refund amounts are capped by that original payment. Pending entries can be voided with a reason; confirmed funds require a refund. Payment retries preserve their key, altered retries conflict, and card/bank references cannot be reused across repair and retail ledgers. New entries retain the employee name/role at the time of the action in permanent audit events.
+
+Use **Print account receipt** on these screens. Local repair receipts work without HTTPS and clearly say when no tax invoice has been issued. When an invoice exists, its historical figures are shown separately from the current account balance. Retail receipts require an issued invoice and preserve its customer/items snapshot. Pending or voided entries are not credited. These are printable browser views; physical Epson certification remains pending.
+
+Historical employee roles are not reconstructed. A legacy refund without an original-payment link blocks further same-method refunds on that order until it is reconciled; existing history is preserved. New operational changes and remaining work are tracked in [development status](docs/DEVELOPMENT_STATUS.md).
 
 ## Release status
 

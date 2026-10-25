@@ -20,7 +20,7 @@ After normalization, every relative path and every file's contents match. There 
 - Added root Git exclusions for private settings, databases, photos, order manifests, backups and runtime files while retaining the package's placeholder instructions.
 - Bound Docker Compose's published port to localhost and made its internal bind address, port and persisted database path explicit.
 
-Application source, original test cases, web assets, native iOS sources, Windows scripts, Go launcher source and supplied Windows executable are unchanged. The original V11 installation, QA, release and long-term implementation documents remain available, including their duplicated copies under `Windows-Server`. Older V6–V10 material is historical reference. The launcher source's older “22.5+” wording is superseded by the V11/package requirement: **Node 22.16+ within 22.x**.
+At the initial October 24 assembly, application source, original test cases, web assets, native iOS sources, Windows scripts, Go launcher source and supplied Windows executable were unchanged. Subsequent development updates payment controls, receipts, backup/restore, browser UI and launcher source/executable; see [development status](DEVELOPMENT_STATUS.md). The source manifest continues to identify the original input files, not current file hashes. Original V11 installation, QA, release and long-term planning documents remain available, including their duplicated copies under `Windows-Server`. Older V6–V10 material is historical reference. The runtime requirement remains **Node 22.16+ within 22.x**.
 
 ## Scope and remaining work
 

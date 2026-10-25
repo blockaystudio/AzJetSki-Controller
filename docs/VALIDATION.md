@@ -1,5 +1,18 @@
 # Assembly validation
 
+## Development update — October 25, 2026
+
+- Full `npm test` on Node **22.23.4** passed: **56 focused tests/subtests**, original V6/V8/V9/V10/V11 API regressions, and a live local HTTP check of refund permissions, changed retry rejection, pending void exclusion, repair/retail print routes, no-store/authentication and the browser module.
+- JavaScript syntax checks cover the application, browser modules and new tests. All test databases, photos, manifests and recovery bundles run in disposable storage.
+- Windows launcher: **13 top-level Go tests** with additional cases passed under the race detector on Linux using Go **1.24.13**; Windows x64 cross-compilation succeeded. Official Go toolchain download SHA-256 was checked before use.
+- Rebuilt `Windows-Server/OwnerTrackerDesktop.exe`: **6,461,952 bytes**, SHA-256 `5d9a77e128dd0916a659ea7f3b49d04c1184296c19a8c4a33cb482c25213927c`. The file is Windows x64 PE32+; this does not verify execution on a real Windows POS.
+- Sol Ultra reviewed the shared financial controls and receipt/accounting distinction; no blocking finance defect remained after its recorder-preservation correction.
+- GitHub Actions now runs Node regressions, launcher race tests, and a Windows build artifact. Remote results are recorded under **Actions**.
+
+This update supersedes the initial assembly's unchanged-source/executable statements. See [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md) for delivered behavior, migration limits and remaining work. Physical Windows/iPhone use, visual browser walkthroughs, signed iOS builds, live providers, HTTPS deployment, accountant approval and production certification remain unverified.
+
+## Initial assembly — October 24, 2026
+
 Date: October 24, 2026. Environment: Linux x64, Node.js **22.23.4**.
 
 ## Passed locally

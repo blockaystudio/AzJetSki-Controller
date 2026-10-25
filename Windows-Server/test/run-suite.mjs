@@ -29,7 +29,7 @@ try {
   console.log(`PASS: JavaScript syntax (${files.length} files)`);
 
   if (!process.argv.includes('--syntax-only')) {
-    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'ownertracker-qa-'));
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ownertracker-qa-')));
     try {
       for (const folder of folders) fs.cpSync(path.join(root, folder), path.join(sandbox, folder), { recursive: true });
       fs.copyFileSync(path.join(root, 'package.json'), path.join(sandbox, 'package.json'));
@@ -50,12 +50,12 @@ try {
       env.TMPDIR = env.TMP = env.TEMP = path.join(sandbox, 'tmp');
       fs.mkdirSync(env.TMPDIR);
 
-      run(process.execPath, ['--test', 'test/db.test.mjs'], sandbox, env);
+      run(process.execPath, ['--test', 'test/db.test.mjs', 'test/finance-controls.test.mjs', 'test/finance-ui.test.mjs', 'test/receipts.test.mjs', 'test/backup-restore.test.mjs'], sandbox, env);
       for (const script of ['run-v6.sh', 'run-billing-v9.sh', 'run-v10.sh', 'run-v11.sh']) {
         console.log(`\nRunning ${script}`);
         run('bash', [path.join('test', script)], sandbox, env);
       }
-      console.log('\nPASS: all database and V6/V8/V9/V10/V11 API regressions');
+      console.log('\nPASS: financial controls, receipts, recovery and all V6/V8/V9/V10/V11 regressions');
     } catch (error) {
       for (const name of fs.readdirSync(path.join(sandbox, 'data')).filter(name => name.endsWith('.log'))) {
         console.error(`\n${name}:\n${fs.readFileSync(path.join(sandbox, 'data', name), 'utf8')}`);

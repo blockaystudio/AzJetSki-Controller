@@ -3,6 +3,7 @@
 // No supplier credentials are stored here; order execution is intentionally disabled.
 import crypto from 'node:crypto';
 import {installTax,shopTaxBps,defaultTaxable,applyOrderTax,calcOrderTax} from './tax.mjs';
+import {installFinancialControls,recordPayment,confirmPayment,voidPayment,financialEvents,paymentRows,canAuthorizeFinance} from './finance-controls.mjs';
 
 export function extendDatabase(db) {
   installTax(db);
@@ -51,6 +52,7 @@ export function extendDatabase(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_purchase_cmd_status ON purchase_commands(status, id);
   `);
+  installFinancialControls(db,'repair');
   // Add structured addresses without destroying legacy single-line address values.
   const addressDefs = [
     "address_line1 TEXT NOT NULL DEFAULT ''", "address_line2 TEXT NOT NULL DEFAULT ''",
@@ -72,7 +74,7 @@ export function extendDatabase(db) {
 const asText=(v,max=4000)=>String(v??'').trim().slice(0,max);
 const num=v=>{const x=Number(v);return Number.isFinite(x)?x:0;};
 const cents=v=>{ if(typeof v==='string'&&!/^\d+(?:\.\d{1,2})?$/.test(v.trim()))throw new Error('Amount must have at most two decimal places'); const n=Number(v); if(!Number.isFinite(n)||n<=0||n>1000000)throw new Error('Amount must be positive and at most $1,000,000');return Math.round(n*100); };
-function paymentTotals(db, id){const sums=db.prepare(`SELECT COALESCE(SUM(CASE WHEN status='confirmed' THEN CASE WHEN direction='payment' THEN amount_cents ELSE -amount_cents END ELSE 0 END),0) confirmed_cents,COALESCE(SUM(CASE WHEN status='pending' AND direction='payment' THEN amount_cents ELSE 0 END),0) pending_cents FROM pos_payments WHERE work_order_id=?`).get(id);return sums;}
+function paymentTotals(db, id){const sums=db.prepare(`SELECT COALESCE(SUM(CASE WHEN status='confirmed' THEN CASE WHEN direction='payment' THEN amount_cents ELSE -amount_cents END ELSE 0 END),0) confirmed_cents,COALESCE(SUM(CASE WHEN status='pending' AND direction='payment' THEN amount_cents ELSE 0 END),0) pending_cents FROM pos_payments WHERE work_order_id=? AND voided_at IS NULL`).get(id);return sums;}
 function syncBalance(db,id){const x=db.prepare('SELECT estimate_total FROM work_orders WHERE id=?').get(id),t=paymentTotals(db,id);if(!x)throw new Error('Work order not found');db.prepare('UPDATE work_orders SET paid_total=?,balance=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(t.confirmed_cents/100,Math.round(Math.max(0,Math.round(x.estimate_total*100)-t.confirmed_cents))/100,id);return {paid:t.confirmed_cents/100,balance:Math.round(Math.max(0,Math.round(x.estimate_total*100)-t.confirmed_cents))/100,pending:t.pending_cents/100};}
 
 const isOwner=u=>u&&['owner','manager'].includes(u.role);
@@ -236,50 +238,32 @@ export function posRoutes({db, currentUser, json, readBody, requireBridge, bridg
       // this endpoint NEVER handles card numbers and does not charge the terminal.
       if(p==='/api/pos/payments'&&req.method==='GET'){
         if(!requireRole(customerEdit))return deny('payment_read');
-        const payments=db.prepare(`SELECT p.id,p.work_order_id,p.method,p.direction,p.amount_cents,p.reference,p.status,p.notes,p.created_at,w.ref_number,w.customer_name FROM pos_payments p JOIN work_orders w ON w.id=p.work_order_id ORDER BY p.id DESC LIMIT 1000`).all();
-        const summary=db.prepare(`SELECT method,status,direction,COUNT(*) count,COALESCE(SUM(amount_cents),0) amount_cents FROM pos_payments GROUP BY method,status,direction`).all();
+        const payments=db.prepare(`SELECT p.id,p.work_order_id,p.method,p.direction,p.amount_cents,p.reference,p.status,p.notes,p.created_at,p.voided_at,p.void_reason,p.actor_username,p.actor_role,p.reason,p.original_payment_id,w.ref_number,w.customer_name FROM pos_payments p JOIN work_orders w ON w.id=p.work_order_id ORDER BY p.id DESC LIMIT 1000`).all();
+        const summary=db.prepare(`SELECT method,status,direction,COUNT(*) count,COALESCE(SUM(amount_cents),0) amount_cents FROM pos_payments WHERE voided_at IS NULL GROUP BY method,status,direction`).all();
         return respond(200,{payments,summary,notice:'Card transactions occur on the external Dejavoo terminal; this ledger only records references and verified funds.'});
       }
       const paymentsM=p.match(/^\/api\/pos\/work-orders\/(\d+)\/payments$/);
       if(paymentsM&&req.method==='GET'){
         if(!u)return deny();const id=Number(paymentsM[1]);
         if(!db.prepare("SELECT id FROM work_orders WHERE id=? AND source='manual'").get(id))return respond(404,{error:'Manual work order not found; legacy imported balances require a migration reconciliation'});
-        return respond(200,{payments:db.prepare('SELECT id,work_order_id,method,direction,amount_cents,reference,status,notes,verified_by,created_at FROM pos_payments WHERE work_order_id=? ORDER BY id').all(id),totals:syncBalance(db,id)});
+        return respond(200,{payments:paymentRows(db,'repair',id),totals:syncBalance(db,id),financialEvents:financialEvents(db,'repair',id),canRefund:canAuthorizeFinance(u),canVoid:canAuthorizeFinance(u)});
       }
       if(paymentsM&&req.method==='POST'){
         if(!requireRole(customerEdit))return deny('payment_record');
-        const id=Number(paymentsM[1]),b=await body(),method=asText(b.method,24),direction=asText(b.direction)||'payment',key=asText(b.idempotency_key,120),ref=asText(b.reference,160),status=asText(b.status)||'confirmed';
-        if(!['cash','card_dejavoo','zelle'].includes(method)||!['payment','refund'].includes(direction)||!['confirmed','pending'].includes(status))return respond(400,{error:'Invalid payment method, direction or status'});
-        if(!key||key.length<8)return respond(400,{error:'Unique idempotency key required'});
-        // Do not trust a Zelle screenshot or a card-terminal request as money received.
-        if(method==='card_dejavoo'&&(!ref||status!=='confirmed'||b.verified!==true))return respond(400,{error:'Record card only after Dejavoo APPROVED and enter receipt/transaction reference'});
-        if(method==='zelle'&&status==='confirmed'&&(!ref||b.verified!==true))return respond(400,{error:'Verify Zelle funds in receiving account and enter bank reference'});
-        if(method==='cash'&&status==='confirmed'&&b.verified!==true)return respond(400,{error:'Confirm cash received and counted'});
-        if(direction==='refund'&&(status!=='confirmed'||!ref||b.verified!==true))return respond(400,{error:'Refund must already be completed externally, with reference'});
-        let amount;try{amount=cents(b.amount);}catch(e){return respond(400,{error:e.message});}
-        const old=db.prepare('SELECT id,work_order_id FROM pos_payments WHERE idempotency_key=?').get(key);
-        if(old)return old.work_order_id===id?respond(200,{duplicate:true,id:old.id,totals:syncBalance(db,id)}):respond(409,{error:'Idempotency key used on another work order'});
-        const wo=db.prepare("SELECT id,estimate_total FROM work_orders WHERE id=? AND source='manual'").get(id);if(!wo)return respond(404,{error:'Work order not found'});
-        const t=paymentTotals(db,id),newNet=t.confirmed_cents+(status==='confirmed'?(direction==='payment'?amount:-amount):0);
-        if(newNet<0)return respond(409,{error:'Refund exceeds net payments received'});
-        if(direction==='refund'){
-          const methodNet=db.prepare(`SELECT COALESCE(SUM(CASE WHEN direction='payment' THEN amount_cents ELSE -amount_cents END),0) net FROM pos_payments WHERE work_order_id=? AND method=? AND status='confirmed'`).get(id,method).net;
-          if(amount>methodNet)return respond(409,{error:'Refund exceeds confirmed payments received via this method'});
-        }
-        if(newNet>Math.round(wo.estimate_total*100))return respond(409,{error:'Confirmed payment exceeds work order total; verify invoice or use adjustment workflow'});
-        db.exec('BEGIN');try{
-          const r=db.prepare('INSERT INTO pos_payments(work_order_id,method,direction,amount_cents,reference,idempotency_key,status,verified_by,notes) VALUES(?,?,?,?,?,?,?,?,?)').run(id,method,direction,amount,ref,key,status,u.id,asText(b.notes,500));
-          const totals=syncBalance(db,id);audit(db,id,u,`Recorded ${direction} (${status})`,{method,amount:amount/100,reference:ref});db.exec('COMMIT');return respond(201,{id:Number(r.lastInsertRowid),totals,status});
-        }catch(e){db.exec('ROLLBACK');throw e;}
+        const id=Number(paymentsM[1]),b=await body();
+        const result=recordPayment(db,'repair',id,u,b,()=>syncBalance(db,id));
+        return respond(result.duplicate?200:201,result);
       }
-      const confirmPayment=p.match(/^\/api\/pos\/payments\/(\d+)\/confirm$/);
-      if(confirmPayment&&req.method==='POST'){
-        if(!requireRole(customerEdit))return deny('payment_record');const id=Number(confirmPayment[1]),b=await body(),pay=db.prepare('SELECT * FROM pos_payments WHERE id=?').get(id);
-        if(!pay)return respond(404,{error:'Payment missing'});if(pay.status==='confirmed')return respond(200,{alreadyConfirmed:true,totals:syncBalance(db,pay.work_order_id)});
-        if(pay.method!=='zelle'||b.verified!==true||!asText(b.reference))return respond(400,{error:'Confirm funds arrived in Zelle receiving bank and provide reference'});
-        const t=paymentTotals(db,pay.work_order_id),wo=db.prepare('SELECT estimate_total FROM work_orders WHERE id=?').get(pay.work_order_id);
-        if(t.confirmed_cents+pay.amount_cents>Math.round(wo.estimate_total*100))return respond(409,{error:'Confirmation exceeds invoice balance'});
-        db.exec('BEGIN');try{db.prepare("UPDATE pos_payments SET status='confirmed',reference=?,verified_by=? WHERE id=? AND status='pending'").run(asText(b.reference),u.id,id);const totals=syncBalance(db,pay.work_order_id);audit(db,pay.work_order_id,u,'Verified pending Zelle',{paymentId:id});db.exec('COMMIT');return respond(200,{ok:true,totals});}catch(e){db.exec('ROLLBACK');throw e;}
+      const confirmM=p.match(/^\/api\/pos\/payments\/(\d+)\/confirm$/);
+      if(confirmM&&req.method==='POST'){
+        if(!requireRole(customerEdit))return deny('payment_record');
+        const result=confirmPayment(db,'repair',Number(confirmM[1]),u,await body(),id=>syncBalance(db,id));
+        return respond(200,result);
+      }
+      const voidM=p.match(/^\/api\/pos\/payments\/(\d+)\/void$/);
+      if(voidM&&req.method==='POST'){
+        if(!requireRole(customerEdit))return deny('payment_void');
+        return respond(200,voidPayment(db,'repair',Number(voidM[1]),u,await body(),id=>syncBalance(db,id)));
       }
       const partM=p.match(/^\/api\/work-orders\/(\d+)\/parts$/);
       if(partM&&req.method==='POST'){
@@ -361,6 +345,7 @@ export function posRoutes({db, currentUser, json, readBody, requireBridge, bridg
         return respond(200,{commands:db.prepare('SELECT id,command_uuid,cart_id,status,agent_message,created_at,finished_at FROM purchase_commands ORDER BY id DESC LIMIT 100').all()});
       }
     }catch(e){
+      if(e.status)return respond(e.status,{error:e.message});
       if(String(e).includes('UNIQUE constraint'))return respond(409,{error:'Duplicate identifier, external receipt, or VIN/HIN'});
       if(/not found|must belong|No editable|Street address|billing address|ZIP\/postal|Invalid state|Address field/.test(String(e.message)))return respond(400,{error:e.message});
       return respond(500,{error:'Operation failed',detail:process.env.NODE_ENV==='production'?undefined:String(e.message||e)});

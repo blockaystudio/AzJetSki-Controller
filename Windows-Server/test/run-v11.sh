@@ -13,3 +13,4 @@ node src/server.mjs > data/v11-test.log 2>&1 & PID=$!
 trap 'kill "$PID" 2>/dev/null || true' EXIT
 sleep 1
 node test/v11-shop-ops.test.mjs
+node test/hardening-api.test.mjs

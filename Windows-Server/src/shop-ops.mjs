@@ -1,6 +1,8 @@
 // Owner Tracker V11: physical custody, counter queues, scheduling, and invoiced retail special orders.
 // All purchase submissions remain manual connector handoffs. Never represent a queued command as a completed purchase.
 import crypto from 'node:crypto';
+import {installFinancialControls,recordPayment,confirmPayment,voidPayment,financialEvents,paymentRows,canAuthorizeFinance} from './finance-controls.mjs';
+import {installReceiptSnapshots,captureRetailReceiptSnapshot} from './receipts.mjs';
 import {installGoogleCalendar,googleStatus,startGoogleAuth,completeGoogleAuth,pushAppointment,markSyncFailed,disconnectGoogle} from './google-calendar.mjs';
 
 const str=(v,n=600)=>String(v??'').trim().slice(0,n);
@@ -86,13 +88,15 @@ export function installShopOps(db){
     actor_id INTEGER REFERENCES users(id), created_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
   `);
+  installFinancialControls(db,'retail');
+  installReceiptSnapshots(db);
   installGoogleCalendar(db);
 }
 const receipt=(db,id)=>db.prepare(`SELECT r.*,c.name customer_name,c.phone,c.email FROM retail_special_orders r JOIN customers c ON c.id=r.customer_id WHERE r.id=?`).get(id);
 const lines=(db,id)=>db.prepare(`SELECT l.*,v.name vendor_name,v.code vendor_code FROM retail_special_lines l LEFT JOIN vendors v ON v.id=l.vendor_id WHERE l.retail_order_id=? ORDER BY l.id`).all(id);
 export function retailTotals(items,bps){let subtotal=0,taxable=0;for(const l of items){const ext=l.quantity*l.unit_price_cents;subtotal+=ext;if(l.taxable)taxable+=ext}const tax=Math.round(taxable*bps/10000);return {subtotal_cents:subtotal,tax_cents:tax,total_cents:subtotal+tax};}
 function recalc(db,id){const r=receipt(db,id);const t=retailTotals(lines(db,id),r.tax_bps);db.prepare('UPDATE retail_special_orders SET subtotal_cents=?,tax_cents=?,total_cents=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(t.subtotal_cents,t.tax_cents,t.total_cents,id);return t;}
-function retailPaymentTotals(db,id){const p=db.prepare("SELECT COALESCE(SUM(CASE WHEN status='confirmed' THEN CASE WHEN direction='payment' THEN amount_cents ELSE -amount_cents END ELSE 0 END),0) paid, COALESCE(SUM(CASE WHEN status='pending' THEN amount_cents ELSE 0 END),0) pending FROM retail_payments WHERE retail_order_id=?").get(id);const r=receipt(db,id);return {...p,due:Math.max(0,r.total_cents-p.paid)};}
+function retailPaymentTotals(db,id){const p=db.prepare("SELECT COALESCE(SUM(CASE WHEN status='confirmed' THEN CASE WHEN direction='payment' THEN amount_cents ELSE -amount_cents END ELSE 0 END),0) paid, COALESCE(SUM(CASE WHEN status='pending' THEN amount_cents ELSE 0 END),0) pending FROM retail_payments WHERE retail_order_id=? AND voided_at IS NULL").get(id);const r=receipt(db,id);return {...p,due:Math.max(0,r.total_cents-p.paid)};}
 function queues(db){
   const rows=db.prepare(`SELECT uc.status custody_status,uc.lot_location,uc.keys_tag,uc.checked_in_at,
     v.id vehicle_id,v.customer_id,v.year,v.make,v.model,v.vin,v.hin,c.name customer_name,c.phone,
@@ -220,7 +224,7 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
     }
     const ro=p.match(/^\/api\/shop\/retail-orders\/(\d+)$/);
     if(ro&&req.method==='GET'){
-      if(!u)return deny();const r=receipt(db,Number(ro[1]));return r?respond(200,{order:{...r,lines:lines(db,r.id),payments:db.prepare('SELECT * FROM retail_payments WHERE retail_order_id=? ORDER BY id').all(r.id),paymentTotals:retailPaymentTotals(db,r.id)}}):respond(404,{error:'Not found'});
+      if(!u)return deny();const r=receipt(db,Number(ro[1]));return r?respond(200,{order:{...r,lines:lines(db,r.id),payments:paymentRows(db,'retail',r.id),paymentTotals:retailPaymentTotals(db,r.id),financialEvents:financialEvents(db,'retail',r.id),canRefund:canAuthorizeFinance(u),canVoid:canAuthorizeFinance(u)}}):respond(404,{error:'Not found'});
     }
     const line=p.match(/^\/api\/shop\/retail-orders\/(\d+)\/lines$/);
     if(line&&req.method==='POST'){
@@ -240,8 +244,15 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
       if(!lines(db,id).length||r.total_cents<=0)return respond(409,{error:'A priced item is required'});
       const c=db.prepare('SELECT * FROM customers WHERE id=?').get(r.customer_id);
       const a=Number(c.billing_same_as_service)!==0?{street:c.address_line1,suite:c.address_line2,city:c.city,state:c.state,zip:c.postal_code}:{street:c.billing_address_line1,suite:c.billing_address_line2,city:c.billing_city,state:c.billing_state,zip:c.billing_postal_code};
-      db.prepare("UPDATE retail_special_orders SET invoice_issued_at=CURRENT_TIMESTAMP,status='invoiced',invoice_address_snapshot_json=? WHERE id=?").run(JSON.stringify(a),id);
-      audit(db,u,'Retail invoice issued',{invoice:r.invoice_number,total:r.total_cents});return respond(200,{order:receipt(db,id)});
+      db.exec('BEGIN IMMEDIATE');
+      try{
+        const issued=db.prepare("UPDATE retail_special_orders SET invoice_issued_at=CURRENT_TIMESTAMP,status='invoiced',invoice_address_snapshot_json=? WHERE id=? AND invoice_issued_at IS NULL").run(JSON.stringify(a),id);
+        if(!issued.changes){db.exec('ROLLBACK');return respond(409,{error:'Invoice already issued'});}
+        captureRetailReceiptSnapshot(db,id);
+        audit(db,u,'Retail invoice issued',{invoice:r.invoice_number,total:r.total_cents});
+        db.exec('COMMIT');
+      }catch(e){db.exec('ROLLBACK');throw e;}
+      return respond(200,{order:receipt(db,id)});
     }
     const verify=p.match(/^\/api\/shop\/retail-orders\/(\d+)\/lines\/(\d+)\/verify$/);
     if(verify&&req.method==='POST'){
@@ -255,34 +266,19 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
     }
     const retailPay=p.match(/^\/api\/shop\/retail-orders\/(\d+)\/payments$/);
     if(retailPay&&req.method==='POST'){
-      if(!staff())return deny('retail_payment');const id=Number(retailPay[1]),r=receipt(db,id),d=await b();if(!r)return respond(404,{error:'Missing retail order'});
-      if(!r.invoice_issued_at)return respond(409,{error:'Cannot collect payment without an issued retail invoice'});
-      const method=str(d.method,30),status=str(d.status||'confirmed',20),direction=str(d.direction||'payment',20),reference=str(d.reference,130),key=str(d.idempotencyKey,140);
-      if(!['cash','card_dejavoo','zelle'].includes(method)||!['pending','confirmed'].includes(status)||!['payment','refund'].includes(direction)||key.length<8)return respond(400,{error:'Invalid payment parameters or missing idempotency key'});
-      if(method==='card_dejavoo'&&(status!=='confirmed'||!reference||d.verified!==true))return respond(409,{error:'Dejavoo must actually approve the card and supply transaction ID'});
-      if(method==='zelle'&&status==='confirmed'&&(!reference||d.verified!==true))return respond(409,{error:'Verify Zelle deposit in bank first'});
-      if(method==='cash'&&status==='confirmed'&&d.verified!==true)return respond(409,{error:'Count and confirm cash received'});
-      if(direction==='refund'&&(status!=='confirmed'||!reference||d.verified!==true))return respond(409,{error:'Refund must already have been processed externally'});
-      const amount=priceCents(d.amount);if(!amount)return respond(400,{error:'Amount must be positive'});
-      const prior=db.prepare('SELECT id,retail_order_id FROM retail_payments WHERE idempotency_key=?').get(key);
-      if(prior)return prior.retail_order_id===id?respond(200,{duplicate:true,id:prior.id,totals:retailPaymentTotals(db,id)}):respond(409,{error:'Idempotency key already used'});
-      const t=retailPaymentTotals(db,id),next=t.paid+(status==='confirmed'?(direction==='payment'?amount:-amount):0);
-      if(next>r.total_cents||next<0)return respond(409,{error:'Overpayment or excessive refund'});
-      if(direction==='refund'){
-        const methodPaid=db.prepare("SELECT COALESCE(SUM(CASE WHEN direction='payment' THEN amount_cents ELSE -amount_cents END),0) n FROM retail_payments WHERE retail_order_id=? AND method=? AND status='confirmed'").get(id,method).n;
-        if(amount>methodPaid)return respond(409,{error:'Refund exceeds this payment method total'});
-      }
-      const x=db.prepare('INSERT INTO retail_payments(retail_order_id,method,direction,amount_cents,status,reference,idempotency_key,recorded_by) VALUES(?,?,?,?,?,?,?,?)').run(id,method,direction,amount,status,reference,key,u.id);
-      audit(db,u,'Retail payment recorded',{id,method,status,direction,amount});return respond(201,{id:Number(x.lastInsertRowid),totals:retailPaymentTotals(db,id)});
+      if(!staff())return deny('retail_payment');const id=Number(retailPay[1]),d=await b();
+      const result=recordPayment(db,'retail',id,u,d,()=>retailPaymentTotals(db,id));
+      return respond(result.duplicate?200:201,result);
     }
     const retailConfirm=p.match(/^\/api\/shop\/retail-payments\/(\d+)\/confirm$/);
     if(retailConfirm&&req.method==='POST'){
-      if(!staff())return deny('retail_payment');const id=Number(retailConfirm[1]),d=await b(),pay=db.prepare('SELECT * FROM retail_payments WHERE id=?').get(id);
-      if(!pay)return respond(404,{error:'Payment not found'});
-      if(pay.status!=='pending'||pay.method!=='zelle'||!d.verified||!str(d.reference))return respond(409,{error:'Only verified pending Zelle payments can be confirmed'});
-      if(pay.amount_cents>retailPaymentTotals(db,pay.retail_order_id).due)return respond(409,{error:'Bank payment exceeds balance'});
-      db.prepare("UPDATE retail_payments SET status='confirmed',reference=? WHERE id=?").run(str(d.reference),id);
-      return respond(200,{totals:retailPaymentTotals(db,pay.retail_order_id)});
+      if(!staff())return deny('retail_payment');
+      return respond(200,confirmPayment(db,'retail',Number(retailConfirm[1]),u,await b(),id=>retailPaymentTotals(db,id)));
+    }
+    const retailVoid=p.match(/^\/api\/shop\/retail-payments\/(\d+)\/void$/);
+    if(retailVoid&&req.method==='POST'){
+      if(!staff())return deny('retail_payment');
+      return respond(200,voidPayment(db,'retail',Number(retailVoid[1]),u,await b(),id=>retailPaymentTotals(db,id)));
     }
     const fulfill=p.match(/^\/api\/shop\/retail-orders\/(\d+)\/lines\/(\d+)\/status$/);
     if(fulfill&&req.method==='POST'){
@@ -380,7 +376,7 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
       db.prepare('UPDATE retail_purchase_commands SET status=?,agent_message=?,finished_at=CURRENT_TIMESTAMP WHERE id=?').run(d.status,str(d.message),cmd.id);
       return respond(200,{status:d.status});
     }
-  }catch(e){return respond(400,{error:String(e.message||e)});}
+  }catch(e){return respond(e.status||400,{error:String(e.message||e)});}
   return false;
  };
 }
