@@ -1,0 +1,9 @@
+{$SHOP_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy ownertracker:8787
+    header {
+        -Server
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+    }
+}

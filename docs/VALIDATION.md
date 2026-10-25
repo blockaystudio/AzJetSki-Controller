@@ -1,5 +1,7 @@
 # Assembly validation
 
+The latest single-shop review release adds the integrated launch-feature suites and deployed private review. See [SHOP_LAUNCH_REVIEW.md](SHOP_LAUNCH_REVIEW.md) and the current GitHub Actions run; earlier milestone results are retained below.
+
 ## Development update — October 25, 2026
 
 - Full `npm test` on Node **22.23.4** passed: **56 focused tests/subtests**, original V6/V8/V9/V10/V11 API regressions, and a live local HTTP check of refund permissions, changed retry rejection, pending void exclusion, repair/retail print routes, no-store/authentication and the browser module.

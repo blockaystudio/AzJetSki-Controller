@@ -1,6 +1,7 @@
 // Owner Tracker V9 billing & work-order DocuSign extension.
 // Does not process raw card data. Provider transaction flows require merchant onboarding.
 import crypto from 'node:crypto';
+import {accountBalance} from './accounting.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {sendInvoiceMail, smtpConfigured} from './shop-mail.mjs';
@@ -30,9 +31,9 @@ export function installCheckout(db){db.exec(`
  if(!db.prepare('PRAGMA table_info(ot_signature_packets)').all().some(x=>x.name==='signed_pdf_name'))db.exec('ALTER TABLE ot_signature_packets ADD COLUMN signed_pdf_name TEXT');
 }
 function work(db,id){const wo=db.prepare('SELECT * FROM work_orders WHERE id=?').get(id);if(!wo)throw Error('Work order not found');return wo;}
-function lines(db,id){return db.prepare('SELECT item_ref,description,line_type,qty,rate,amount FROM work_order_lines WHERE work_order_id=? ORDER BY id').all(id);}
+function lines(db,id){return db.prepare('SELECT item_ref,description,line_type,qty,rate,amount,taxable FROM work_order_lines WHERE work_order_id=? ORDER BY id').all(id);}
 function payments(db,id){return db.prepare("SELECT method,direction,status,amount_cents,reference,created_at FROM pos_payments WHERE work_order_id=? ORDER BY id").all(id);}
-function currentBalance(db,id){const w=work(db,id);const p=db.prepare("SELECT COALESCE(SUM(CASE WHEN status='confirmed' THEN CASE WHEN direction='payment' THEN amount_cents ELSE -amount_cents END ELSE 0 END),0) paid FROM pos_payments WHERE work_order_id=?").get(id);const total=Math.round(Number(w.estimate_total||0)*100);return {total,paid:p.paid,balance:Math.max(0,total-p.paid)};}
+function currentBalance(db,id){const w=work(db,id),p=accountBalance(db,'repair',id,Math.round(Number(w.estimate_total||0)*100));return {total:p.rawTotalCents,effectiveTotal:p.effectiveTotalCents,credits:p.creditCents,paid:p.netPaidCents,balance:p.dueCents,refundDue:p.refundDueCents};}
 function addressRecord(db,w){
  const c=w.customer_id?db.prepare('SELECT * FROM customers WHERE id=?').get(w.customer_id):null;
  if(!c)return {service:null,billing:null};
@@ -63,7 +64,7 @@ function packetLines(w,details){return [
  'Authorization is limited to the scope and amount stated above.'
  ];}
 function authDocument(db,w,params){const l=packetLines(w,{...params,addresses:addressRecord(db,w)});return makePdf(l);}
-export function checkoutRoutes({db,currentUser,json,readBody,publicBaseUrl,shopName='Arizona Jet Ski',requestTimeoutMs=12000}){
+export function checkoutRoutes({db,currentUser,json,readBody,publicBaseUrl,shopName='Arizona Jet Ski',requestTimeoutMs=12000,notify=null}){
  installCheckout(db);
  const base=(publicBaseUrl||'').replace(/\/$/,'');
  const send=(res,code,data)=>{json(res,code,data);return true};
@@ -78,23 +79,17 @@ export function checkoutRoutes({db,currentUser,json,readBody,publicBaseUrl,shopN
   const inv=p.match(/^\/api\/pos\/work-orders\/(\d+)\/invoice(?:s)?$/);
   if(inv&&req.method==='GET'){if(!owner(req))return error(res,403,'Staff permission required');const rows=db.prepare('SELECT id,number,amount_cents,recipient_name,recipient_email,issued_at,valid_until,voided_at FROM ot_invoices WHERE work_order_id=? ORDER BY id DESC').all(Number(inv[1]));return send(res,200,{invoices:rows});}
   if(inv&&req.method==='POST'){
-   const u=owner(req);if(!u)return error(res,403,'Staff permission required');const w=work(db,Number(inv[1]));if(w.source!=='manual')return error(res,409,'Historical imported balances must be reconciled before invoicing');const b=await readBody(req);const total=currentBalance(db,w.id),cust=t(w.customer_name,200),email=t(b.email??w.email,240);if(!total.balance)return error(res,409,'This work order has no balance to invoice');
+   const u=owner(req);if(!u)return error(res,403,'Staff permission required');let w=work(db,Number(inv[1]));if(w.source!=='manual')return error(res,409,'Historical imported balances must be reconciled before invoicing');const b=await readBody(req);w=work(db,Number(inv[1]));const total=currentBalance(db,w.id),cust=t(w.customer_name,200),email=t(b.email??w.email,240);if(!total.balance)return error(res,409,'This work order has no balance to invoice');
    const publicBase=safeUrl(base);if(!publicBase)return error(res,409,'Configure a public HTTPS URL before creating customer links');
    const token=crypto.randomBytes(32).toString('base64url'),number=`INV-${String(w.id).padStart(6,'0')}-${Date.now().toString(36).toUpperCase()}`;
-   const snapshot={refNumber:w.ref_number,unit:w.unit_label||[w.year,w.make,w.model].filter(Boolean).join(' '),estimateCents:total.total,paidCents:total.paid,balanceCents:total.balance,addresses:addressRecord(db,w),taxRateBps:Number(w.tax_rate_bps||0),taxCents:Number(w.tax_total_cents||0),items:lines(db,w.id),createdAt:new Date().toISOString()};
+   const snapshot={refNumber:w.ref_number,unit:w.unit_label||[w.year,w.make,w.model].filter(Boolean).join(' '),estimateCents:total.total,creditCents:total.credits,effectiveCents:total.effectiveTotal,paidCents:total.paid,balanceCents:total.balance,addresses:addressRecord(db,w),taxRateBps:Number(w.tax_rate_bps||0),taxCents:Number(w.tax_total_cents||0),items:lines(db,w.id),createdAt:new Date().toISOString()};
    const r=db.prepare('INSERT INTO ot_invoices(work_order_id,number,token_hash,amount_cents,valid_until,recipient_name,recipient_email,recipient_phone,snapshot_json,created_by) VALUES(?,?,?,?,?,?,?,?,?,?)').run(w.id,number,sha(token),total.balance,new Date(Date.now()+30*86400000).toISOString(),cust,email,t(w.phone,80),JSON.stringify(snapshot),u.id);
    const link=`${base}/invoice/${token}`,subject=`Invoice ${number} - ${shopName}`;
    let deliveryStatus='not_requested',mailProvider='none';if(b.sendEmail===true){
     if(!email.includes('@'))deliveryStatus='not_sent_missing_recipient';
-    else if(process.env.SENDGRID_API_KEY&&process.env.INVOICE_FROM_EMAIL){
-     mailProvider='sendgrid';try{
-      const mail={personalizations:[{to:[{email,name:cust}],subject}],from:{email:process.env.INVOICE_FROM_EMAIL,name:shopName},content:[{type:'text/plain',value:`${cust},\n\nYour invoice ${number} from ${shopName} has a balance of ${dollar(total.balance)}.\nReview your invoice: ${link}\n\nThank you.`}]};
-      const posted=await fetch('https://api.sendgrid.com/v3/mail/send',{method:'POST',headers:{Authorization:`Bearer ${process.env.SENDGRID_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify(mail),signal:AbortSignal.timeout(12000)});
-      deliveryStatus=posted.status===202?'accepted_by_email_provider':`not_sent_provider_http_${posted.status}`;
-     }catch{deliveryStatus='not_sent_provider_error';}
-    }else if(smtpConfigured()){
-     mailProvider='smtp';try{const m=await sendInvoiceMail({to:email,name:cust,shop:shopName,subject,message:`${cust},\n\nYour invoice ${number} has a balance of ${dollar(total.balance)}.\nReview the invoice using the secure link below.`,link});deliveryStatus=m.status;}catch{deliveryStatus='not_sent_smtp_error';}
-    }else deliveryStatus='not_sent_email_provider_unconfigured';
+    else if(notify&&w.customer_id&&email.toLowerCase()!==String(db.prepare('SELECT email FROM customers WHERE id=?').get(w.customer_id)?.email||'').trim().toLowerCase())deliveryStatus='not_sent_recipient_review_required';
+    else if(notify){const queued=await notify('invoice_issued',w,{invoiceId:Number(r.lastInsertRowid),eventId:'invoice:'+r.lastInsertRowid,invoiceUrl:link,amount:total.balance/100});deliveryStatus=queued.status;mailProvider='durable_outbox';}
+    else deliveryStatus='not_sent_email_outbox_unavailable';
     db.prepare('INSERT INTO ot_invoice_deliveries(invoice_id,recipient_email,status,provider) VALUES(?,?,?,?)').run(Number(r.lastInsertRowid),email,deliveryStatus,mailProvider);
    }
    return send(res,201,{deliveryStatus,id:Number(r.lastInsertRowid),number,amount:total.balance/100,link,subject,customerEmail:email,message:`${cust}, your ${shopName} invoice ${number} has a remaining balance of ${dollar(total.balance)}. Review the invoice securely: ${link} . Card payment options will appear once the Dejavoo Hosted Payment Page is activated.`});
@@ -104,7 +99,7 @@ export function checkoutRoutes({db,currentUser,json,readBody,publicBaseUrl,shopN
    const invoice=db.prepare('SELECT * FROM ot_invoices WHERE token_hash=? AND voided_at IS NULL').get(sha(pubInv[1]));
    if(!invoice)return error(res,404,'Invoice not found');if(new Date(invoice.valid_until).getTime()<Date.now())return error(res,410,'Invoice link expired');
    const data=JSON.parse(invoice.snapshot_json),balance=currentBalance(db,invoice.work_order_id),requests=db.prepare("SELECT amount_cents,method,status,external_checkout_url FROM ot_payment_requests WHERE invoice_id=? AND status IN ('verified','prepared','awaiting_provider','pending') ORDER BY id DESC").all(invoice.id);
-   const html=`<!doctype html><html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1"><meta charset="utf-8"><title>${esc(invoice.number)}</title><style>body{font:16px system-ui;background:#f4f7fa;color:#1b2832;padding:20px}main{max-width:700px;margin:auto;background:white;border-radius:14px;padding:24px;box-shadow:0 3px 18px #0001}table{width:100%;border-collapse:collapse}td{padding:10px;border-bottom:1px solid #eee}.primary{color:#14624a;font-size:28px;font-weight:800}a.button{display:inline-block;background:#126e50;color:white;padding:12px;border-radius:8px;text-decoration:none}</style><main><img src="/brand-logo.png" alt="AZ Jet Ski + Powersports" style="max-width:185px;height:auto;display:block"><h2>${esc(shopName)}</h2><h1>Invoice ${esc(invoice.number)}</h1><p>Customer: ${esc(invoice.recipient_name)} · WO ${esc(data.refNumber)}</p><p>${esc(data.unit)}</p><p><strong>Bill to</strong><br>${formatAddress(data.addresses?.billing).map(esc).join('<br>')||'Billing address not on file'}</p><table>${(data.items||[]).map(x=>`<tr><td>${esc(x.description)}</td><td>${esc(x.qty)}</td><td style="text-align:right">${dollar(Math.round(Number(x.amount)*100))}</td></tr>`).join('')}</table><p>Original total: ${dollar(data.estimateCents)}</p><p>Verified payments and refunds: ${dollar(balance.paid)}</p><p>Currently due:</p><div class="primary">${dollar(balance.balance)}</div><p>Cash or Zelle payments may be arranged with the shop. Zelle is credited only after verification.</p>${requests.filter(x=>x.method==='dejavoo_hpp'&&x.external_checkout_url&&safeUrl(x.external_checkout_url)&&x.status==='awaiting_provider').map(x=>`<p><a class="button" rel="noopener noreferrer" href="${esc(x.external_checkout_url)}">Pay ${dollar(x.amount_cents)} securely by card</a></p>`).join('')}<p><small>Owner Tracker does not collect credit card numbers. In-person transactions are processed on the Dejavoo P1.</small></p></main></html>`;
+   const html=`<!doctype html><html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1"><meta charset="utf-8"><title>${esc(invoice.number)}</title><style>body{font:16px system-ui;background:#f4f7fa;color:#1b2832;padding:20px}main{max-width:700px;margin:auto;background:white;border-radius:14px;padding:24px;box-shadow:0 3px 18px #0001}table{width:100%;border-collapse:collapse}td{padding:10px;border-bottom:1px solid #eee}.primary{color:#14624a;font-size:28px;font-weight:800}a.button{display:inline-block;background:#126e50;color:white;padding:12px;border-radius:8px;text-decoration:none}</style><main><img src="/brand-logo.png" alt="AZ Jet Ski + Powersports" style="max-width:185px;height:auto;display:block"><h2>${esc(shopName)}</h2><h1>Invoice ${esc(invoice.number)}</h1><p>Customer: ${esc(invoice.recipient_name)} · WO ${esc(data.refNumber)}</p><p>${esc(data.unit)}</p><p><strong>Bill to</strong><br>${formatAddress(data.addresses?.billing).map(esc).join('<br>')||'Billing address not on file'}</p><table>${(data.items||[]).map(x=>`<tr><td>${esc(x.description)}</td><td>${esc(x.qty)}</td><td style="text-align:right">${dollar(Math.round(Number(x.amount)*100))}</td></tr>`).join('')}</table><p>Original total: ${dollar(data.estimateCents)}</p><p>Retained credit notes: ${dollar(balance.credits)}</p><p>Adjusted current account charge: ${dollar(balance.effectiveTotal)}</p><p>Verified payments and refunds: ${dollar(balance.paid)}</p>${balance.refundDue?`<p>Refund due to customer: ${dollar(balance.refundDue)}</p>`:''}<p>Currently due:</p><div class="primary">${dollar(balance.balance)}</div><p>Cash or Zelle payments may be arranged with the shop. Zelle is credited only after verification.</p>${requests.filter(x=>x.method==='dejavoo_hpp'&&x.external_checkout_url&&safeUrl(x.external_checkout_url)&&x.status==='awaiting_provider').map(x=>`<p><a class="button" rel="noopener noreferrer" href="${esc(x.external_checkout_url)}">Pay ${dollar(x.amount_cents)} securely by card</a></p>`).join('')}<p><small>Owner Tracker does not collect credit card numbers. In-person transactions are processed on the Dejavoo P1.</small></p></main></html>`;
    res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer'});res.end(html);return true;
   }
   const payReq=p.match(/^\/api\/billing\/invoices\/(\d+)\/payment-requests$/);

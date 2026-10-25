@@ -1,6 +1,6 @@
 {
   "name": "ownertracker-v11-pos-suite",
-  "version": "11.0.0-dev",
+  "version": "11.1.0-preview.1",
   "private": true,
   "type": "module",
   "engines": {
@@ -13,6 +13,9 @@
     "backup": "node scripts/backup-all.mjs",
     "test": "node test/run-suite.mjs",
     "check": "node test/run-suite.mjs --syntax-only",
-    "demo": "node scripts/seed-demo.mjs"
+    "demo": "node scripts/seed-demo.mjs",
+    "backup:encrypted": "node scripts/encrypted-backup.mjs",
+    "release:package": "node scripts/package-release.mjs",
+    "recover-owner": "node scripts/recover-owner.mjs"
   }
 }

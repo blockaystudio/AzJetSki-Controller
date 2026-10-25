@@ -1,5 +1,7 @@
 # Development status — October 25, 2026
 
+This document records the earlier financial-control milestone. The expanded single-shop review release and current feature coverage are documented in [SHOP_LAUNCH_REVIEW.md](SHOP_LAUNCH_REVIEW.md).
+
 This update advances the shared Windows POS/server and browser clients. The two original ZIPs are one application; the native iOS sources remain part of the same suite.
 
 | Implementation-plan item | Development progress | Remaining acceptance |

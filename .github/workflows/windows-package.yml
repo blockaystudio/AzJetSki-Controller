@@ -1,0 +1,32 @@
+name: Verify Windows install and rollback
+
+on:
+  push:
+    paths:
+      - 'Windows-Server/**'
+      - '.github/workflows/windows-package.yml'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Package private-data-free release
+        working-directory: Windows-Server
+        shell: pwsh
+        run: node scripts/package-release.mjs "$env:RUNNER_TEMP\OwnerTracker-release"
+      - name: Verify installation and rollback on Windows
+        shell: pwsh
+        run: ./Windows-Server/windows/Test-Installer.ps1 -ReleaseDir "$env:RUNNER_TEMP\OwnerTracker-release"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OwnerTracker-shop-release
+          path: ${{ runner.temp }}/OwnerTracker-release

@@ -1,5 +1,6 @@
 // Authenticated, printable receipts. GET never changes a payment, invoice, or job.
 import crypto from 'node:crypto';
+import {accountBalance} from './accounting.mjs';
 
 const staffRoles = new Set(['owner', 'manager', 'service_writer', 'advisor', 'parts']);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -74,6 +75,7 @@ function ledgerTotals(payments) {
 }
 
 function billingLines(address = {}) {
+  address ||= {};
   return [address.line1 ?? address.street, address.line2 ?? address.suite,
     [address.city, address.state, address.postalCode ?? address.zip].filter(Boolean).join(' ')].filter(Boolean);
 }
@@ -118,7 +120,7 @@ function repairReceipt(db, id) {
     customerName: invoice.recipient_name, ref: snapshot.refNumber, unit: snapshot.unit,
     address: billingLines(snapshot.addresses?.billing), total, tax, subtotal: total - tax,
     taxRateBps: taxRate(snapshot.taxRateBps ?? 0), currentTotal, isRepair: true,
-    paidAtIssue: cents(snapshot.paidCents ?? 0), dueAtIssue: cents(snapshot.balanceCents ?? invoice.amount_cents),
+    creditsAtIssue: cents(snapshot.creditCents ?? 0), effectiveAtIssue: cents(snapshot.effectiveCents ?? total), paidAtIssue: cents(snapshot.paidCents ?? 0), dueAtIssue: cents(snapshot.balanceCents ?? invoice.amount_cents),
     items: snapshot.items.map(item => ({
       description: item.description, sku: item.item_ref, quantity: item.qty,
       rate: cents(Math.round(Number(item.rate) * 100)), amount: cents(Math.round(Number(item.amount) * 100))
@@ -164,7 +166,8 @@ function receiptHtml(receipt, { shopName, shopPhone, nonce }) {
   const e = escapeHtml, totals = ledgerTotals(receipt.payments);
   const changed = receipt.currentTotal !== receipt.total;
   const localAccount = receipt.hasIssuedInvoice === false;
-  const due = Math.max(0, receipt.currentTotal - totals.net);
+  const due = receipt.accounting?.dueCents ?? Math.max(0, receipt.currentTotal - totals.net);
+  const credit = receipt.accounting?.creditCents || 0, refundDue = receipt.accounting?.refundDueCents || 0;
   const amountRow = (label, amount, strong = false) => `<tr${strong ? ' class="total"' : ''}><th>${e(label)}</th><td>${e(money(amount))}</td></tr>`;
   const methods = { cash: 'Cash', card_dejavoo: 'Dejavoo card (external)', zelle: 'Zelle' };
   const paymentRows = receipt.payments.map(payment => {
@@ -183,11 +186,11 @@ function receiptHtml(receipt, { shopName, shopPhone, nonce }) {
 ${receipt.legacy ? '<p class="notice">Legacy invoice: the customer name and item details below were not snapshotted when this invoice was issued. The billing address and invoice totals are recorded values. Review the original invoice if historical details are needed.</p>' : ''}
 ${localAccount ? '<p class="notice">This is a current work order account receipt, not an issued tax invoice. There is no active issued customer invoice attached to this statement. Customer details, item descriptions and amounts below are current work order records.</p>' : ''}
 ${changed ? '<p class="notice"><strong>The current order total differs from this issued invoice.</strong> Current account activity and balance appear separately from the historical invoice below. Review the current order and any supplemental invoice before releasing a vehicle or parts.</p>' : ''}
-<h2>${receipt.isRepair ? 'Current work order account' : 'Current retail invoice account'}</h2><p class="status">${due ? 'Payment pending' : receipt.isRepair ? 'Work order account paid' : 'Retail invoice paid'}</p>
-<table class="summary"><tbody>${amountRow(receipt.isRepair ? 'Current work order total' : 'Retail invoice total', receipt.currentTotal, true)}${amountRow('Confirmed receipts / deposits', totals.received)}${amountRow('Confirmed refunds', -totals.refunded)}${amountRow('Net confirmed payments', totals.net)}${amountRow('Pending payments — not credited', totals.pending)}${amountRow(receipt.isRepair ? 'Current work order balance' : 'Retail invoice balance', due, true)}</tbody></table>
+<h2>${receipt.isRepair ? 'Current work order account' : 'Current retail invoice account'}</h2><p class="status">${refundDue ? 'Customer refund due' : due ? 'Payment pending' : receipt.isRepair ? 'Work order account paid' : 'Retail invoice paid'}</p>
+<table class="summary"><tbody>${amountRow(receipt.isRepair ? 'Current work order total' : 'Retail invoice total', receipt.currentTotal, true)}${credit?amountRow('Retained invoice credits',-credit)+amountRow('Adjusted account charge',receipt.currentTotal-credit,true):''}${amountRow('Confirmed receipts / deposits', totals.received)}${amountRow('Confirmed refunds', -totals.refunded)}${amountRow('Net confirmed payments', totals.net)}${amountRow('Pending payments — not credited', totals.pending)}${refundDue?amountRow('Refund due to customer',refundDue,true):''}${amountRow(receipt.isRepair ? 'Current work order balance' : 'Retail invoice balance', due, true)}</tbody></table>
 <p><small>Deposits are included in confirmed payments above; they are not added twice. Pending or voided entries do not reduce the balance. Card and bank references record funds verified by shop staff; this receipt does not certify processor settlement or execute a charge or refund.</small></p>
 ${localAccount ? '<h2>Current work order detail</h2>' : `<h2>Invoice at issue · ${e(receipt.invoiceNumber)}</h2><p>Historical invoice issued ${e(receipt.issuedAt)}. The itemized amounts in this section are the issued snapshot${receipt.legacy ? ' where available; see the legacy notice above' : ''}.</p>`}<table><thead><tr><th>Item</th><th>Quantity</th><th>Unit price</th><th>Amount</th></tr></thead><tbody>${receipt.items.map(item => `<tr><td>${e(item.description)}${item.sku ? `<br><small>${e(item.sku)}</small>` : ''}</td><td>${e(item.quantity)}</td><td>${e(money(item.rate))}</td><td>${e(money(item.amount))}</td></tr>`).join('')}</tbody></table>
-<table class="summary"><tbody>${amountRow(localAccount ? 'Current subtotal' : 'Invoice subtotal at issue', receipt.subtotal)}${amountRow(`${localAccount ? 'Current sales tax' : 'Invoice sales tax'} (${(Number(receipt.taxRateBps) / 100).toFixed(2)}%)`, receipt.tax)}${amountRow(localAccount ? 'Current work order total' : 'Invoice total at issue', receipt.total, true)}${receipt.isRepair && !localAccount ? amountRow('Confirmed payments at issue', receipt.paidAtIssue) + amountRow('Invoice balance at issue', receipt.dueAtIssue) : ''}</tbody></table>
+<table class="summary"><tbody>${amountRow(localAccount ? 'Current subtotal' : 'Invoice subtotal at issue', receipt.subtotal)}${amountRow(`${localAccount ? 'Current sales tax' : 'Invoice sales tax'} (${(Number(receipt.taxRateBps) / 100).toFixed(2)}%)`, receipt.tax)}${amountRow(localAccount ? 'Current work order total' : 'Invoice total at issue', receipt.total, true)}${receipt.isRepair && !localAccount ? (receipt.creditsAtIssue?amountRow('Retained credits at issue', -receipt.creditsAtIssue)+amountRow('Adjusted invoice charge at issue',receipt.effectiveAtIssue):'')+amountRow('Confirmed payments at issue', receipt.paidAtIssue) + amountRow('Invoice balance at issue', receipt.dueAtIssue) : ''}</tbody></table>
 <h2>${receipt.isRepair ? 'Work order' : 'Retail invoice'} payment history</h2><table><thead><tr><th>Date / ID</th><th>Method / status</th><th>Reference</th><th>Amount</th></tr></thead><tbody>${paymentRows || '<tr><td colspan="4">No payments recorded.</td></tr>'}</tbody></table><p><small>Payment status does not by itself authorize vehicle or parts release.</small></p><p>Thank you.</p></main>
 <script nonce="${nonce}">document.getElementById('print').addEventListener('click',()=>window.print());</script></body></html>`;
 }
@@ -210,6 +213,7 @@ export function receiptRoutes({ db, currentUser, json, shopName = 'Owner Tracker
       if (!hasTable(db, match[1] === 'repair' ? 'ot_invoices' : 'retail_special_orders')) return error(409, 'Invoice records are not available');
       const receipt = match[1] === 'repair' ? repairReceipt(db, id) : retailReceipt(db, id);
       if (receipt.error) return error(receipt.status, receipt.error);
+      receipt.accounting=accountBalance(db,match[1],id,receipt.currentTotal);
       const nonce = crypto.randomBytes(18).toString('base64');
       const html = receiptHtml(receipt, { shopName, shopPhone, nonce });
       res.writeHead(200, {

@@ -10,6 +10,16 @@ import { checkoutRoutes } from './payment-docs.mjs';
 import { deviceRoutes } from './pos-devices.mjs';
 import { shopOpsRoutes } from './shop-ops.mjs';
 import { receiptRoutes } from './receipts.mjs';
+import {createAccessSecurity} from './access-security.mjs';
+import {createCustomerAccess} from './customer-access.mjs';
+import {authorizationRoutes,readRetainedAuthorizationDocument} from './authorizations.mjs';
+import {installEditRevisions,requireEditRevision,withEditRevisions} from './edit-revisions.mjs';
+import {accountingRoutes} from './accounting.mjs';
+import {shopManagementRoutes} from './shop-management.mjs';
+import {createMaintenance} from './maintenance.mjs';
+import {shopReportsRoutes} from './shop-reports.mjs';
+import {syncAppointmentChange,calendarChangeRoutes} from './google-calendar.mjs';
+import {createNotificationService,notificationRoutes} from './service-notifications.mjs';
 
 loadEnv();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -47,7 +57,7 @@ const PERMISSIONS = {
 };
 
 const json = (res, status, value, headers = {}) => {
-  const body = JSON.stringify(value);
+  const body = JSON.stringify(withEditRevisions(db,value));
   res.writeHead(status, {'content-type':'application/json; charset=utf-8','content-length':Buffer.byteLength(body),...headers});
   res.end(body);
 };
@@ -60,12 +70,11 @@ const readBody = async (req, max = 20_000_000) => {
   const chunks=[]; let size=0;
   for await (const c of req) { size += c.length; if (size > max) throw new Error('Body too large'); chunks.push(c); }
   const raw=Buffer.concat(chunks).toString('utf8');
-  return raw ? JSON.parse(raw) : {};
+  const parsed=raw ? JSON.parse(raw) : {};
+  if(currentUser(req))requireEditRevision(db,req,new URL(req.url,'http://local').pathname,parsed);
+  return parsed;
 };
-function currentUser(req) {
-  const t=parseCookies(req).ot_session; if(!t) return null;
-  return db.prepare(`SELECT u.id,u.username,COALESCE(u.display_name,u.username) display_name,u.role,u.active FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>datetime('now') AND u.active=1`).get(tokenHash(t)) || null;
-}
+function currentUser(req) { return accessSecurity.sessionUser(req); }
 function requireUser(req,res) { const u=currentUser(req); if(!u){ json(res,401,{error:'Unauthorized'}); return null; } return u; }
 function can(user, permission) { return !!user && (PERMISSIONS[user.role]?.has(permission) || false); }
 function requirePermission(req,res,permission) { const u=requireUser(req,res); if(!u) return null; if(!can(u,permission)){ json(res,403,{error:'Permission denied'}); return null; } return u; }
@@ -73,10 +82,24 @@ function requireBridge(req,res) { if((req.headers.authorization||'') !== `Bearer
 function audit(workOrderId, actor, action, detail='') { db.prepare('INSERT INTO audit_log(work_order_id,actor,action,detail) VALUES(?,?,?,?)').run(workOrderId||null,actor,action,typeof detail==='string'?detail:JSON.stringify(detail)); }
 
 const posRouter=posRoutes({db,currentUser,json,readBody,bridgeToken:AGENT_TOKEN});
-const checkoutRouter=checkoutRoutes({db,currentUser,json,readBody,publicBaseUrl:PUBLIC_BASE_URL,shopName:SHOP_NAME});
+const checkoutRouter=checkoutRoutes({db,currentUser,json,readBody,publicBaseUrl:PUBLIC_BASE_URL,shopName:SHOP_NAME,notify:(event,wo,extra)=>notifications.queueEvent(event,wo,extra)});
 const deviceRouter=deviceRoutes({db,currentUser,json,readBody,shopName:SHOP_NAME,shopPhone:SHOP_PHONE});
 const opsRouter=shopOpsRoutes({db,currentUser,json,readBody,bridgeToken:AGENT_TOKEN});
 const receiptsRouter=receiptRoutes({db,currentUser,json,shopName:SHOP_NAME,shopPhone:SHOP_PHONE});
+const accessSecurity=createAccessSecurity({db,json,readBody,publicBaseUrl:PUBLIC_BASE_URL,sessionSecret:SESSION_SECRET});
+const authorizationsRouter=authorizationRoutes({db,currentUser,json,readBody,publicBaseUrl:PUBLIC_BASE_URL,shopName:SHOP_NAME,uploadDir,notify:(event,wo,extra)=>notifications.queueEvent(event,wo,extra)});
+const customerAccess=createCustomerAccess({db,currentUser,json,readBody,publicBaseUrl:PUBLIC_BASE_URL,shopName:SHOP_NAME,shopPhone:SHOP_PHONE,uploadDir,authorizationDocument:(id,wo)=>readRetainedAuthorizationDocument(db,id,wo,uploadDir)});
+const accountingRouter=accountingRoutes({db,currentUser,json,readBody});
+const managementRouter=shopManagementRoutes({db,currentUser,json,readBody,calendarChange:appointment=>syncAppointmentChange(db,appointment)});
+const notifications=createNotificationService({db,shopName:SHOP_NAME});
+const notificationsRouter=notificationRoutes({service:notifications,currentUser,json,readBody});
+const calendarChangesRouter=calendarChangeRoutes({db,currentUser,json,readBody});
+notifications.start();
+const reportsRouter=shopReportsRoutes({db,currentUser,json,readBody});
+const maintenance=createMaintenance({db,currentUser,json,readBody});
+installEditRevisions(db);
+maintenance.start();
+
 function canAccessJob(u,id) {
   if (!u) return false;
   if (u.role !== 'technician') return true;
@@ -155,26 +178,10 @@ function upsertImported(x, actor='qbpos-bridge') {
   return {id,created:!old};
 }
 
-async function notify(event, wo, extra={}) {
-  const url=process.env.NOTIFY_WEBHOOK_URL;
-  if(!url){db.prepare('INSERT INTO notifications(work_order_id,event,destination,status,detail) VALUES(?,?,?,?,?)').run(wo.id,event,wo.phone||'','skipped','NOTIFY_WEBHOOK_URL not configured');return {status:'skipped'};}
-  try{
-    const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({event,workOrder:{id:wo.id,refNumber:wo.ref_number,customerName:wo.customer_name,phone:wo.phone,email:wo.email,unit:wo.unit_label||[wo.year,wo.make,wo.model].filter(Boolean).join(' ')},...extra})});
-    const detail=await r.text();db.prepare('INSERT INTO notifications(work_order_id,event,destination,status,detail) VALUES(?,?,?,?,?)').run(wo.id,event,wo.phone||'',r.ok?'sent':'error',detail.slice(0,1000));return {status:r.ok?'sent':'error',httpStatus:r.status};
-  }catch(e){db.prepare('INSERT INTO notifications(work_order_id,event,destination,status,detail) VALUES(?,?,?,?,?)').run(wo.id,event,wo.phone||'','error',String(e));return {status:'error',error:String(e)};}
-}
-async function docusignEnvelope(wo, approvalToken) {
-  if((process.env.DOCUSIGN_MODE||'disabled')!=='template') return {mode:'internal'};
-  const base=process.env.DOCUSIGN_BASE_URL,account=process.env.DOCUSIGN_ACCOUNT_ID,access=process.env.DOCUSIGN_ACCESS_TOKEN,template=process.env.DOCUSIGN_TEMPLATE_ID;
-  if(!base||!account||!access||!template) throw new Error('DocuSign template mode is missing configuration'); if(!wo.email) throw new Error('Customer email is required for DocuSign template mode');
-  const payload={templateId:template,status:'sent',templateRoles:[{roleName:'Customer',name:wo.customer_name||'Customer',email:wo.email,tabs:{textTabs:[{tabLabel:'WorkOrderNumber',value:wo.ref_number||String(wo.id)},{tabLabel:'AuthorizedWork',value:wo.authorized_work||wo.complaint||''},{tabLabel:'OwnerTrackerApprovalUrl',value:`${PUBLIC_BASE_URL}/approval/${approvalToken}`} ]}}]};
-  const r=await fetch(`${base.replace(/\/$/,'')}/v2.1/accounts/${encodeURIComponent(account)}/envelopes`,{method:'POST',headers:{authorization:`Bearer ${access}`,'content-type':'application/json'},body:JSON.stringify(payload)}); const body=await r.json().catch(()=>({})); if(!r.ok) throw new Error(`DocuSign ${r.status}: ${JSON.stringify(body)}`); return {mode:'docusign',envelopeId:body.envelopeId};
-}
-function createPortalLink(workOrderId, days=90) {
-  const token=crypto.randomBytes(32).toString('base64url'); const expires=new Date(Date.now()+days*86400e3).toISOString();
-  db.prepare('INSERT INTO customer_portal_tokens(work_order_id,token_hash,expires_at) VALUES(?,?,?)').run(workOrderId,publicHash(token),expires);
-  return `${PUBLIC_BASE_URL}/portal/${token}`;
-}
+async function notify(event,wo,extra={}){return notifications.queueEvent(event,wo,extra);}
+
+function createPortalLink(workOrderId,days=30){return customerAccess.createLink(workOrderId,{days});}
+
 function portalRecord(token) { return db.prepare(`SELECT p.*,w.* FROM customer_portal_tokens p JOIN work_orders w ON w.id=p.work_order_id WHERE p.token_hash=? AND p.active=1 AND (p.expires_at IS NULL OR p.expires_at>datetime('now'))`).get(publicHash(token)); }
 function saveImage({workOrderId,updateId=null,approvalId=null,scope='progress',filename,mimeType,dataBase64,caption='',customerVisible=true,userId}) {
   const allowed=new Set(['image/jpeg','image/png','image/webp']); if(!allowed.has(mimeType)) throw new Error('Only JPEG, PNG, and WebP images are accepted');
@@ -281,10 +288,16 @@ function approvalHtml(token,a) {
 const server=http.createServer(async(req,res)=>{
   try{
     const url=new URL(req.url,`http://${req.headers.host||'localhost'}`),p=url.pathname;
-    if(['POST','PATCH','PUT','DELETE'].includes(req.method)&&req.headers.origin){
-      const allowed=[new URL(PUBLIC_BASE_URL).origin,`${req.headers['x-forwarded-proto']==='https'?'https':'http'}://${req.headers.host}`];
-      if(!allowed.includes(req.headers.origin))return json(res,403,{error:'Cross-origin mutation denied'});
-    }
+    if(accessSecurity.middleware(req,res))return;
+    if(await accessSecurity.routes(req,res,p,url))return;
+    if(await customerAccess.routes(req,res,p,url))return;
+    if(await authorizationsRouter(req,res,p,url))return;
+    if(await reportsRouter(req,res,p,url))return;
+    if(await accountingRouter(req,res,p,url))return;
+    if(await notificationsRouter(req,res,p,url))return;
+    if(await calendarChangesRouter(req,res,p,url))return;
+    if(await managementRouter(req,res,p,url))return;
+    if(await maintenance.routes(req,res,p,url))return;
     if(await receiptsRouter(req,res,p,url))return;
     if(await opsRouter(req,res,p,url))return;
     if(await deviceRouter(req,res,p,url))return;
@@ -298,7 +311,7 @@ const server=http.createServer(async(req,res)=>{
       return json(res,200,{ok:true,user:userView(u)},{'set-cookie':`ot_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${PUBLIC_BASE_URL.startsWith('https://')?'; Secure':''}`});
     }
     if(p==='/api/logout'&&req.method==='POST'){const t=parseCookies(req).ot_session;if(t)db.prepare('DELETE FROM sessions WHERE token_hash=?').run(tokenHash(t));return json(res,200,{ok:true},{'set-cookie':'ot_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'});}
-    if(p==='/api/me'&&req.method==='GET'){const u=currentUser(req);return json(res,200,{user:u?userView(u):null,shop:{name:SHOP_NAME,phone:SHOP_PHONE},stages:STAGES,roles:ROLES,permissions:u?[...PERMISSIONS[u.role]||[]]:[]});}
+    if(p==='/api/me'&&req.method==='GET'){const u=currentUser(req);return json(res,200,{reviewMode:process.env.OWNERTRACKER_REVIEW==='true',user:u?userView(u):null,shop:{name:SHOP_NAME,phone:SHOP_PHONE},stages:STAGES,roles:ROLES,permissions:u?[...PERMISSIONS[u.role]||[]]:[]});}
 
     if(p==='/api/integrations/qbpos/work-orders/bulk'&&req.method==='POST'){
       if(!requireBridge(req,res))return;const b=await readBody(req,20_000_000),items=Array.isArray(b)?b:(b.workOrders||[]);let created=0,updated=0,errors=[],changedIds=[];db.exec('BEGIN');try{for(const item of items){try{const r=upsertImported(item);changedIds.push(r.id);r.created?created++:updated++;}catch(e){errors.push({externalId:item.externalId||item.txnId||'',error:String(e.message||e)});}}db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
@@ -308,12 +321,12 @@ const server=http.createServer(async(req,res)=>{
     if(p==='/api/integrations/qbpos/sync-log'&&req.method==='POST'){if(!requireBridge(req,res))return;const b=await readBody(req);db.prepare('INSERT INTO sync_runs(source,status,imported_count,updated_count,detail) VALUES(?,?,?,?,?)').run('qbpos',String(b.status||'info'),Number(b.imported||0),Number(b.updated||0),String(b.detail||''));return json(res,200,{ok:true});}
 
     if(p==='/api/dashboard'&&req.method==='GET'){
-      const u=requirePermission(req,res,'read');if(!u)return;const summary=db.prepare(`SELECT COUNT(*) open_jobs,COALESCE(SUM(estimate_total),0) pipeline,COALESCE(SUM(balance),0) unpaid,COALESCE(SUM(labor_total),0) labor_sold,SUM(CASE WHEN stage='Awaiting Approval' THEN 1 ELSE 0 END) approvals,SUM(CASE WHEN julianday('now')-julianday(COALESCE(date_opened,created_at))>=7 AND stage NOT IN ('Closed','Picked Up','Declined') THEN 1 ELSE 0 END) aging FROM work_orders WHERE stage NOT IN ('Closed','Picked Up','Declined')`).get();
+      const u=requirePermission(req,res,'read');if(!u)return;if(u.role==='technician')return json(res,403,{error:'Use the assigned-work queue'});const summary=db.prepare(`SELECT COUNT(*) open_jobs,COALESCE(SUM(estimate_total),0) pipeline,COALESCE(SUM(balance),0) unpaid,COALESCE(SUM(labor_total),0) labor_sold,SUM(CASE WHEN stage='Awaiting Approval' THEN 1 ELSE 0 END) approvals,SUM(CASE WHEN julianday('now')-julianday(COALESCE(date_opened,created_at))>=7 AND stage NOT IN ('Closed','Picked Up','Declined') THEN 1 ELSE 0 END) aging FROM work_orders WHERE stage NOT IN ('Closed','Picked Up','Declined')`).get();
       summary.parts_missing=db.prepare(`SELECT COUNT(*) c FROM part_requirements pr WHERE pr.active=1 AND pr.status='needs_source' AND NOT EXISTS(SELECT 1 FROM supplier_offers so WHERE so.part_requirement_id=pr.id AND so.available_qty>0)`).get().c; summary.orders_ready=db.prepare("SELECT COUNT(*) c FROM procurement_carts WHERE status IN ('ready_to_submit','manual_action_required')").get().c;
       const pipeline=db.prepare(`SELECT stage,COUNT(*) count,COALESCE(SUM(estimate_total),0) total FROM work_orders GROUP BY stage ORDER BY CASE stage ${STAGES.map((s,i)=>`WHEN '${s.replaceAll("'","''")}' THEN ${i}`).join(' ')} ELSE 99 END`).all(); const recent=db.prepare(`SELECT w.id,w.ref_number,w.customer_name,w.unit_label,w.year,w.make,w.model,w.stage,w.estimate_total,w.balance,w.updated_at,w.date_opened,w.assigned_user_id,COALESCE(u.display_name,u.username) assigned_name,w.next_action,w.priority FROM work_orders w LEFT JOIN users u ON u.id=w.assigned_user_id ORDER BY datetime(w.updated_at) DESC LIMIT 30`).all(); const sync=db.prepare('SELECT * FROM sync_runs ORDER BY id DESC LIMIT 5').all();return json(res,200,{summary,pipeline,recent,sync});
     }
     if(p==='/api/my-work'&&req.method==='GET'){
-      const u=requirePermission(req,res,'read');if(!u)return;let rows;if(['owner','manager','service_writer'].includes(u.role))rows=db.prepare(`SELECT w.id,w.ref_number,w.customer_name,w.unit_label,w.year,w.make,w.model,w.stage,w.priority,w.next_action,w.next_action_due,COALESCE(us.display_name,us.username) assigned_name FROM work_orders w LEFT JOIN users us ON us.id=w.assigned_user_id WHERE w.stage NOT IN ('Closed','Picked Up','Declined') ORDER BY CASE w.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,COALESCE(w.next_action_due,'9999')`).all();else rows=db.prepare(`SELECT w.id,w.ref_number,w.customer_name,w.unit_label,w.year,w.make,w.model,w.stage,w.priority,w.next_action,w.next_action_due,COALESCE(us.display_name,us.username) assigned_name FROM work_orders w LEFT JOIN users us ON us.id=w.assigned_user_id WHERE w.stage NOT IN ('Closed','Picked Up','Declined') AND (w.assigned_user_id=? OR w.tech=? OR w.tech=?) ORDER BY CASE w.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,COALESCE(w.next_action_due,'9999')`).all(u.id,u.username,u.display_name);return json(res,200,{workOrders:rows});
+      const u=requirePermission(req,res,'read');if(!u)return;let rows;if(['owner','manager','service_writer'].includes(u.role))rows=db.prepare(`SELECT w.id,w.ref_number,w.customer_name,w.unit_label,w.year,w.make,w.model,w.stage,w.priority,w.next_action,w.next_action_due,COALESCE(us.display_name,us.username) assigned_name FROM work_orders w LEFT JOIN users us ON us.id=w.assigned_user_id WHERE w.stage NOT IN ('Closed','Picked Up','Declined') ORDER BY CASE w.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,COALESCE(w.next_action_due,'9999')`).all();else rows=db.prepare(`SELECT w.id,w.ref_number,w.customer_name,w.unit_label,w.year,w.make,w.model,w.stage,w.priority,w.next_action,w.next_action_due,COALESCE(us.display_name,us.username) assigned_name FROM work_orders w LEFT JOIN users us ON us.id=w.assigned_user_id WHERE w.stage NOT IN ('Closed','Picked Up','Declined') AND (w.assigned_user_id=? OR (?='advisor' AND w.service_advisor_id=?)) ORDER BY CASE w.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,COALESCE(w.next_action_due,'9999')`).all(u.id,u.role,u.id);return json(res,200,{workOrders:rows});
     }
     if(p==='/api/work-orders'&&req.method==='GET'){
       const u=requirePermission(req,res,'read');if(!u)return;const stage=url.searchParams.get('stage')||'',q=url.searchParams.get('q')||'';let sql=`SELECT w.id,w.source,w.external_id,w.ref_number,w.customer_name,w.phone,w.unit_label,w.year,w.make,w.model,w.stage,w.estimate_total,w.parts_total,w.labor_total,w.paid_total,w.balance,w.tech,w.date_opened,w.updated_at,w.priority,w.next_action,w.assigned_user_id,COALESCE(u.display_name,u.username) assigned_name FROM work_orders w LEFT JOIN users u ON u.id=w.assigned_user_id WHERE 1=1`;const params=[];if(u.role==='technician'){sql+=' AND w.assigned_user_id=?';params.push(u.id)}if(stage){sql+=' AND w.stage=?';params.push(stage);}if(q){sql+=' AND (w.ref_number LIKE ? OR w.customer_name LIKE ? OR w.phone LIKE ? OR w.unit_label LIKE ? OR w.make LIKE ? OR w.model LIKE ?)';for(let i=0;i<6;i++)params.push(`%${q}%`);}sql+=' ORDER BY datetime(w.updated_at) DESC LIMIT 500';return json(res,200,{workOrders:db.prepare(sql).all(...params)});
@@ -321,13 +334,13 @@ const server=http.createServer(async(req,res)=>{
     const wm=p.match(/^\/api\/work-orders\/(\d+)$/);
     if(wm&&req.method==='GET'){const u=requirePermission(req,res,'read');if(!u)return;if(!canAccessJob(u,Number(wm[1])))return json(res,403,{error:'Not assigned to this work order'});const wo=workOrderView(Number(wm[1]));return wo?json(res,200,{workOrder:wo}):json(res,404,{error:'Not found'});}
     if(wm&&req.method==='PATCH'){
-      const u=requirePermission(req,res,'edit_job');if(!u)return;if(!canAccessJob(u,Number(wm[1])))return json(res,403,{error:'Not assigned to this work order'});const id=Number(wm[1]),b=await readBody(req),allowed=(u.role==='technician'?['stage','next_action','next_action_due']:['stage','authorized_work','tech','unit_label','year','make','model','serial','complaint','assigned_user_id','priority','promised_date','next_action','next_action_due']),sets=[],params=[];for(const k of allowed)if(Object.hasOwn(b,k)){if(k==='stage'&&!STAGES.includes(b[k]))return json(res,400,{error:'Invalid stage'});if(k==='assigned_user_id'&&!can(u,'assign_job'))return json(res,403,{error:'Only service writers/managers can reassign jobs'});if(k==='assigned_user_id'){sets.push(`${k}=?`);params.push(b[k]?Number(b[k]):null);}else{sets.push(`${k}=?`);params.push(String(b[k]??''));}}if(!sets.length)return json(res,400,{error:'No editable fields'});sets.push('updated_at=CURRENT_TIMESTAMP');params.push(id);db.prepare(`UPDATE work_orders SET ${sets.join(',')} WHERE id=?`).run(...params);audit(id,u.username,'Work order updated',b);return json(res,200,{ok:true,workOrder:workOrderView(id)});
+      const u=requirePermission(req,res,'edit_job');if(!u)return;if(!canAccessJob(u,Number(wm[1])))return json(res,403,{error:'Not assigned to this work order'});const id=Number(wm[1]),b=await readBody(req);requireEditRevision(db,req,p,b);const allowed=(u.role==='technician'?['stage','next_action','next_action_due']:['stage','authorized_work','tech','unit_label','year','make','model','serial','complaint','assigned_user_id','priority','promised_date','next_action','next_action_due']),sets=[],params=[];for(const k of allowed)if(Object.hasOwn(b,k)){if(k==='stage'&&!STAGES.includes(b[k]))return json(res,400,{error:'Invalid stage'});if(k==='assigned_user_id'&&!can(u,'assign_job'))return json(res,403,{error:'Only service writers/managers can reassign jobs'});if(k==='assigned_user_id'){sets.push(`${k}=?`);params.push(b[k]?Number(b[k]):null);}else{sets.push(`${k}=?`);params.push(String(b[k]??''));}}if(!sets.length)return json(res,400,{error:'No editable fields'});sets.push('updated_at=CURRENT_TIMESTAMP');params.push(id);db.prepare(`UPDATE work_orders SET ${sets.join(',')} WHERE id=?`).run(...params);audit(id,u.username,'Work order updated',b);return json(res,200,{ok:true,workOrder:workOrderView(id)});
     }
     const noteM=p.match(/^\/api\/work-orders\/(\d+)\/notes$/);
     if(noteM&&req.method==='POST'){const u=requirePermission(req,res,'notes');if(!u)return;if(!canAccessJob(u,Number(noteM[1])))return json(res,403,{error:'Not assigned to this work order'});const id=Number(noteM[1]),b=await readBody(req),body=String(b.body||'').trim();if(!body)return json(res,400,{error:'Note required'});db.prepare('INSERT INTO notes(work_order_id,body,author) VALUES(?,?,?)').run(id,body,u.display_name||u.username);audit(id,u.username,'Internal note added');return json(res,200,{ok:true});}
     const updateM=p.match(/^\/api\/work-orders\/(\d+)\/updates$/);
     if(updateM&&req.method==='POST'){
-      const u=requirePermission(req,res,'updates');if(!u)return;if(!canAccessJob(u,Number(updateM[1])))return json(res,403,{error:'Not assigned to this work order'});const id=Number(updateM[1]),wo=workOrderView(id);if(!wo)return json(res,404,{error:'Not found'});const b=await readBody(req),title=String(b.title||'').trim(),body=String(b.body||'').trim(),visible=b.customerVisible!==false,notifyCustomer=!!b.notifyCustomer; if(!title&&!body)return json(res,400,{error:'Update title or body required'});
+      const u=requirePermission(req,res,'updates');if(!u)return;if(!canAccessJob(u,Number(updateM[1])))return json(res,403,{error:'Not assigned to this work order'});const id=Number(updateM[1]),wo=workOrderView(id);if(!wo)return json(res,404,{error:'Not found'});const b=await readBody(req);requireEditRevision(db,req,p,b);const title=String(b.title||'').trim(),body=String(b.body||'').trim(),visible=b.customerVisible!==false,notifyCustomer=!!b.notifyCustomer; if(!title&&!body)return json(res,400,{error:'Update title or body required'});
       const r=db.prepare(`INSERT INTO work_order_updates(work_order_id,author_user_id,author_name,title,body,stage,customer_visible,notify_customer) VALUES(?,?,?,?,?,?,?,?)`).run(id,u.id,u.display_name||u.username,title,body,String(b.stage||wo.stage),visible?1:0,notifyCustomer?1:0); const updateId=Number(r.lastInsertRowid); const mediaIds=Array.isArray(b.mediaIds)?b.mediaIds.map(Number).filter(Boolean):[]; if(mediaIds.length){const marks=mediaIds.map(()=>'?').join(',');db.prepare(`UPDATE media SET update_id=? WHERE work_order_id=? AND id IN (${marks})`).run(updateId,id,...mediaIds);}
       if(b.stage&&STAGES.includes(b.stage))db.prepare('UPDATE work_orders SET stage=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(b.stage,id);let portalUrl=null,notification=null;if(visible&&notifyCustomer){portalUrl=createPortalLink(id);notification=await notify('customer_progress_update',workOrderView(id),{portalUrl,title,body,stage:b.stage||wo.stage});}audit(id,u.username,'Customer progress update posted',{title,visible,notifyCustomer,mediaIds});return json(res,200,{ok:true,updateId,portalUrl,notification});
     }
@@ -340,15 +353,15 @@ const server=http.createServer(async(req,res)=>{
       const u=requirePermission(req,res,'approval');if(!u)return;const id=Number(approvalM[1]),wo=workOrderView(id);if(!wo)return json(res,404,{error:'Not found'});const b=await readBody(req),desc=String(b.authorizedDescription||wo.authorized_work||wo.complaint||'').trim();if(!desc)return json(res,400,{error:'Authorized work description is required'});const token=crypto.randomBytes(32).toString('base64url');const r=db.prepare('INSERT INTO approvals(work_order_id,token_hash,status,authorized_description) VALUES(?,?,?,?)').run(id,publicHash(token),'sent',desc);const approvalId=Number(r.lastInsertRowid);const mediaIds=Array.isArray(b.mediaIds)?b.mediaIds.map(Number).filter(Boolean):[];if(mediaIds.length){const marks=mediaIds.map(()=>'?').join(',');db.prepare(`UPDATE media SET approval_id=?,scope='approval',customer_visible=1 WHERE work_order_id=? AND id IN (${marks})`).run(approvalId,id,...mediaIds);}let ds={mode:'internal'};try{ds=await docusignEnvelope(wo,token);if(ds.envelopeId)db.prepare('UPDATE approvals SET external_envelope_id=? WHERE id=?').run(ds.envelopeId,approvalId);}catch(e){return json(res,502,{error:String(e.message||e)});}db.prepare("UPDATE work_orders SET stage='Awaiting Approval',authorized_work=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(desc,id);const approvalUrl=`${PUBLIC_BASE_URL}/approval/${token}`;await notify('approval_requested',workOrderView(id),{approvalUrl,authorizedDescription:desc,docusign:ds});audit(id,u.username,'Approval requested',{approvalUrl,docusign:ds,mediaIds});return json(res,200,{ok:true,approvalUrl,approvalId,docusign:ds});
     }
     const readyM=p.match(/^\/api\/work-orders\/(\d+)\/ready$/);
-    if(readyM&&req.method==='POST'){const u=requirePermission(req,res,'ready');if(!u)return;const id=Number(readyM[1]),wo=workOrderView(id);if(!wo)return json(res,404,{error:'Not found'});db.prepare("UPDATE work_orders SET stage='Ready',next_action='Customer pickup',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id);const portalUrl=createPortalLink(id);const notification=await notify('ready_for_pickup',workOrderView(id),{shop:{name:SHOP_NAME,phone:SHOP_PHONE},portalUrl});audit(id,u.username,'Marked ready and pickup notification triggered',notification);return json(res,200,{ok:true,notification,portalUrl});}
+    if(readyM&&req.method==='POST'){const u=requirePermission(req,res,'ready');if(!u)return;const readyInput=await readBody(req);requireEditRevision(db,req,p,readyInput);const id=Number(readyM[1]),wo=workOrderView(id);if(!wo)return json(res,404,{error:'Not found'});db.prepare("UPDATE work_orders SET stage='Ready',next_action='Customer pickup',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id);const portalUrl=createPortalLink(id);const notification=await notify('ready_for_pickup',workOrderView(id),{shop:{name:SHOP_NAME,phone:SHOP_PHONE},portalUrl});audit(id,u.username,'Marked ready and pickup notification triggered',notification);return json(res,200,{ok:true,notification,portalUrl});}
 
     if(p==='/api/staff'&&req.method==='GET'){const u=requirePermission(req,res,'read');if(!u)return;const rows=db.prepare("SELECT id,username,display_name,role,active,last_login_at,created_at FROM users WHERE active=1 AND role!='viewer' ORDER BY display_name,username").all();return json(res,200,{users:rows.map(userView)});}
     if(p==='/api/users'&&req.method==='GET'){const u=requirePermission(req,res,'users');if(!u)return;const rows=db.prepare('SELECT id,username,display_name,role,active,last_login_at,created_at FROM users ORDER BY active DESC,display_name,username').all();return json(res,200,{users:rows.map(userView)});}
     if(p==='/api/users'&&req.method==='POST'){
-      const u=requirePermission(req,res,'users');if(!u)return;const b=await readBody(req),username=String(b.username||'').trim().toLowerCase(),displayName=String(b.displayName||username).trim(),role=String(b.role||'technician'),password=String(b.password||''),pin=String(b.pin||'');if(!username||!ROLES.includes(role)||password.length<8)return json(res,400,{error:'Username, valid role, and password of at least 8 characters required'});if(pin&&(!/^\d{4,8}$/.test(pin)))return json(res,400,{error:'PIN must be 4-8 digits'});const ph=hashPassword(password),pinh=pin?hashPassword(pin):{salt:null,hash:null};try{const r=db.prepare('INSERT INTO users(username,display_name,password_hash,salt,role,active,pin_hash,pin_salt) VALUES(?,?,?,?,?,1,?,?)').run(username,displayName,ph.hash,ph.salt,role,pinh.hash,pinh.salt);return json(res,201,{ok:true,user:userView(db.prepare('SELECT * FROM users WHERE id=?').get(Number(r.lastInsertRowid)))});}catch(e){if(String(e).includes('UNIQUE'))return json(res,409,{error:'Username already exists'});throw e;}
+      const u=requirePermission(req,res,'users');if(!u)return;const b=await readBody(req),username=String(b.username||'').trim().toLowerCase(),displayName=String(b.displayName||username).trim(),role=String(b.role||'technician'),password=String(b.password||''),pin=String(b.pin||'');if(u.role!=='owner'&&role==='owner')return json(res,403,{error:'Only an owner may create another owner'});if(!username||!ROLES.includes(role)||password.length<8)return json(res,400,{error:'Username, valid role, and password of at least 8 characters required'});if(pin&&(!/^\d{4,8}$/.test(pin)))return json(res,400,{error:'PIN must be 4-8 digits'});const ph=hashPassword(password),pinh=pin?hashPassword(pin):{salt:null,hash:null};try{const r=db.prepare('INSERT INTO users(username,display_name,password_hash,salt,role,active,pin_hash,pin_salt) VALUES(?,?,?,?,?,1,?,?)').run(username,displayName,ph.hash,ph.salt,role,pinh.hash,pinh.salt);return json(res,201,{ok:true,user:userView(db.prepare('SELECT * FROM users WHERE id=?').get(Number(r.lastInsertRowid)))});}catch(e){if(String(e).includes('UNIQUE'))return json(res,409,{error:'Username already exists'});throw e;}
     }
     const userM=p.match(/^\/api\/users\/(\d+)$/);
-    if(userM&&req.method==='PATCH'){const u=requirePermission(req,res,'users');if(!u)return;const id=Number(userM[1]),b=await readBody(req),sets=[],vals=[];if(Object.hasOwn(b,'displayName')){sets.push('display_name=?');vals.push(String(b.displayName||''));}if(Object.hasOwn(b,'role')){if(!ROLES.includes(b.role))return json(res,400,{error:'Invalid role'});sets.push('role=?');vals.push(b.role);}if(Object.hasOwn(b,'active')){sets.push('active=?');vals.push(b.active?1:0);}if(b.password){if(String(b.password).length<8)return json(res,400,{error:'Password must be at least 8 characters'});const x=hashPassword(b.password);sets.push('password_hash=?','salt=?');vals.push(x.hash,x.salt);}if(Object.hasOwn(b,'pin')){if(b.pin&&!/^\d{4,8}$/.test(String(b.pin)))return json(res,400,{error:'PIN must be 4-8 digits'});const x=b.pin?hashPassword(b.pin):{hash:null,salt:null};sets.push('pin_hash=?','pin_salt=?');vals.push(x.hash,x.salt);}if(!sets.length)return json(res,400,{error:'No changes'});sets.push('updated_at=CURRENT_TIMESTAMP');vals.push(id);db.prepare(`UPDATE users SET ${sets.join(',')} WHERE id=?`).run(...vals);return json(res,200,{ok:true,user:userView(db.prepare('SELECT * FROM users WHERE id=?').get(id))});}
+    if(userM&&req.method==='PATCH'){const u=requirePermission(req,res,'users');if(!u)return;const id=Number(userM[1]),b=await readBody(req),sets=[],vals=[];const target=db.prepare('SELECT id,role,active FROM users WHERE id=?').get(id);if(!target)return json(res,404,{error:'Employee not found'});if(u.role!=='owner'&&(target.role==='owner'||b.role==='owner'))return json(res,403,{error:'Only an owner may change owner accounts or assign owner access'});if(Object.hasOwn(b,'active')&&typeof b.active!=='boolean')return json(res,400,{error:'Active must be true or false'});if(target.role==='owner'&&target.active&&((b.role&&b.role!=='owner')||b.active===false)&&db.prepare("SELECT COUNT(*) n FROM users WHERE role='owner' AND active=1").get().n<=1)return json(res,409,{error:'Keep at least one active owner account'});if(Object.hasOwn(b,'displayName')){sets.push('display_name=?');vals.push(String(b.displayName||''));}if(Object.hasOwn(b,'role')){if(!ROLES.includes(b.role))return json(res,400,{error:'Invalid role'});sets.push('role=?');vals.push(b.role);}if(Object.hasOwn(b,'active')){sets.push('active=?');vals.push(b.active?1:0);}if(b.password){if(String(b.password).length<8)return json(res,400,{error:'Password must be at least 8 characters'});const x=hashPassword(b.password);sets.push('password_hash=?','salt=?');vals.push(x.hash,x.salt);}if(Object.hasOwn(b,'pin')){if(b.pin&&!/^\d{4,8}$/.test(String(b.pin)))return json(res,400,{error:'PIN must be 4-8 digits'});const x=b.pin?hashPassword(b.pin):{hash:null,salt:null};sets.push('pin_hash=?','pin_salt=?');vals.push(x.hash,x.salt);}if(!sets.length)return json(res,400,{error:'No changes'});sets.push('updated_at=CURRENT_TIMESTAMP');vals.push(id);db.prepare(`UPDATE users SET ${sets.join(',')} WHERE id=?`).run(...vals);audit(null,u.username,'Employee account updated',{userId:id,changedFields:Object.keys(b)});return json(res,200,{ok:true,user:userView(db.prepare('SELECT * FROM users WHERE id=?').get(id))});}
 
     if(p==='/api/vendors'&&req.method==='GET'){const u=requirePermission(req,res,'parts');if(!u)return;return json(res,200,{vendors:db.prepare('SELECT * FROM vendors ORDER BY name').all(),liveVendorOrdering:LIVE_VENDOR_ORDERING});}
     const vendorM=p.match(/^\/api\/vendors\/(\d+)$/);
@@ -364,7 +377,34 @@ const server=http.createServer(async(req,res)=>{
     if(p==='/api/procurement/refresh-status'&&req.method==='POST'){const u=requirePermission(req,res,'parts');if(!u)return;return json(res,200,{ok:true,...await refreshOrderStatuses()});}
     if(p==='/api/procurement'&&req.method==='GET'){const u=requirePermission(req,res,'parts');if(!u)return;return json(res,200,procurementSummary());}
     const cartM=p.match(/^\/api\/procurement\/carts\/(\d+)$/);
-    if(cartM&&req.method==='PATCH'){const u=requirePermission(req,res,'parts');if(!u)return;const id=Number(cartM[1]),b=await readBody(req),sets=[],vals=[],existing=db.prepare('SELECT * FROM procurement_carts WHERE id=?').get(id);if(!existing)return json(res,404,{error:'Cart not found'});const allowedStatuses=new Set(['draft','waiting_threshold','ready_to_submit','manual_action_required','ordered','backordered','partially_shipped','shipped','received','cancelled','error']);if(Object.hasOwn(b,'status')&&!allowedStatuses.has(String(b.status)))return json(res,400,{error:'Invalid order status'});for(const k of ['status','order_reference','tracking_number','eta_text'])if(Object.hasOwn(b,k)){sets.push(`${k}=?`);vals.push(String(b[k]??''));}const lines=db.prepare('SELECT * FROM procurement_cart_lines WHERE cart_id=?').all(id);const orderedStates=new Set(['ordered','backordered','partially_shipped','shipped','received']);if(b.status&&orderedStates.has(b.status)&&!orderedStates.has(existing.status)){for(const l of lines)db.prepare("UPDATE part_requirements SET qty_ordered=qty_ordered+?,status='ordered',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(l.qty,l.part_requirement_id);}if(b.status==='received'&&existing.status!=='received'){sets.push('received_at=CURRENT_TIMESTAMP');for(const l of lines)db.prepare("UPDATE part_requirements SET qty_received=qty_received+?,status='received',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(l.qty,l.part_requirement_id);}if(b.status==='cancelled'&&orderedStates.has(existing.status)){for(const l of lines)db.prepare("UPDATE part_requirements SET qty_ordered=MAX(0,qty_ordered-?),status='sourced',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(l.qty,l.part_requirement_id);}if(!sets.length)return json(res,400,{error:'No changes'});sets.push('updated_at=CURRENT_TIMESTAMP');vals.push(id);db.prepare(`UPDATE procurement_carts SET ${sets.join(',')} WHERE id=?`).run(...vals);return json(res,200,{ok:true});}
+    if(cartM&&req.method==='PATCH'){
+      const u=requirePermission(req,res,'parts');if(!u)return;
+      const id=Number(cartM[1]),input=await readBody(req),existing=db.prepare('SELECT * FROM procurement_carts WHERE id=?').get(id);
+      if(!existing)return json(res,404,{error:'Cart not found'});
+      if(Object.hasOwn(input,'status')&&(typeof input.status!=='string'||!['draft','waiting_threshold','ready_to_submit','manual_action_required','ordered','backordered','partially_shipped','shipped','received','cancelled','error'].includes(input.status)))return json(res,400,{error:'Invalid order status'});
+      const next=String(input.status||existing.status),ordered=new Set(['ordered','backordered','partially_shipped','shipped','received']);
+      const transitions={draft:['waiting_threshold','ready_to_submit','cancelled'],waiting_threshold:['draft','ready_to_submit','cancelled'],ready_to_submit:['draft','waiting_threshold','cancelled'],manual_action_required:['ordered','backordered','partially_shipped','shipped','received','cancelled'],ordered:['backordered','partially_shipped','shipped','received','cancelled'],backordered:['ordered','partially_shipped','shipped','received','cancelled'],partially_shipped:['backordered','shipped','received','cancelled'],shipped:['partially_shipped','received'],received:[],cancelled:[],error:['draft','cancelled']};
+      if(next!==existing.status&&!transitions[existing.status]?.includes(next))return json(res,409,{error:'This order status transition requires reviewed purchasing or a new record'});
+      const reference=String(input.order_reference||existing.order_reference||'').trim();
+      if(ordered.has(existing.status)&&Object.hasOwn(input,'order_reference')&&String(input.order_reference).trim()!==String(existing.order_reference||'').trim())return json(res,409,{error:'Retain the original supplier confirmation; record corrections in an audited receiving record'});
+      if(ordered.has(next)){
+        if(!db.prepare('SELECT id FROM purchase_commands WHERE cart_id=? LIMIT 1').get(id))return json(res,409,{error:'Review and queue the exact supplier cart before recording an actual supplier order'});
+        if(reference.length<3)return json(res,409,{error:'A real supplier order/confirmation reference is required'});
+      }
+      if(next==='cancelled'&&ordered.has(existing.status)&&String(input.reason||'').trim().length<5)return json(res,400,{error:'Record the supplier cancellation reason'});
+      const fields=['status','order_reference','tracking_number','eta_text'].filter(key=>Object.hasOwn(input,key));
+      if(!fields.length)return json(res,400,{error:'No editable order fields'});
+      const lines=db.prepare('SELECT * FROM procurement_cart_lines WHERE cart_id=?').all(id);
+      db.exec('BEGIN IMMEDIATE');try{
+        if(ordered.has(next)&&!ordered.has(existing.status))for(const line of lines)db.prepare("UPDATE part_requirements SET qty_ordered=qty_ordered+?,status='ordered',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(line.qty,line.part_requirement_id);
+        if(next==='received'&&existing.status!=='received')for(const line of lines)db.prepare("UPDATE part_requirements SET qty_received=qty_received+?,status='received',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(line.qty,line.part_requirement_id);
+        if(next==='cancelled'&&ordered.has(existing.status))for(const line of lines)db.prepare("UPDATE part_requirements SET qty_ordered=MAX(0,qty_ordered-?),status='needs_source',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(line.qty,line.part_requirement_id);
+        db.prepare(`UPDATE procurement_carts SET ${fields.map(key=>key+'=?').join(',')},updated_at=CURRENT_TIMESTAMP${next==='received'?",received_at=CURRENT_TIMESTAMP":''} WHERE id=?`).run(...fields.map(key=>String(input[key]??'').slice(0,500)),id);
+        audit(null,u.username,'Supplier order status updated',{cartId:id,status:next,reference,reason:String(input.reason||'').slice(0,500)});db.exec('COMMIT');
+      }catch(error){db.exec('ROLLBACK');throw error;}
+      return json(res,200,{ok:true});
+    }
+
     const submitM=p.match(/^\/api\/procurement\/carts\/(\d+)\/submit$/);
     if(submitM&&req.method==='POST'){const u=requirePermission(req,res,'submit_orders');if(!u)return;return json(res,409,{error:'Direct submission disabled. Review all lines with /review to queue an audited desktop command.'});}
 
@@ -383,6 +423,15 @@ const server=http.createServer(async(req,res)=>{
     if(ap&&req.method==='POST'){const a=db.prepare(`SELECT a.*,w.ref_number,w.customer_name,w.phone,w.email FROM approvals a JOIN work_orders w ON w.id=a.work_order_id WHERE a.token_hash=?`).get(publicHash(ap[1]));if(!a)return json(res,404,{error:'Approval link not found'});if(a.status==='completed')return json(res,409,{error:'Approval already completed'});const b=await readBody(req),choices=['Approve Repairs','Diagnostics/Teardown Only','Decline Repairs'];if(!choices.includes(b.choice)||!b.agree||!String(b.signerName||'').trim())return json(res,400,{error:'Choice, legal name, and agreement are required'});const signed=new Date().toISOString();db.prepare('UPDATE approvals SET status=?,choice=?,signer_name=?,signed_at=? WHERE id=?').run('completed',b.choice,String(b.signerName).trim(),signed,a.id);const stage=b.choice==='Approve Repairs'?'In Progress':b.choice==='Diagnostics/Teardown Only'?'Diagnosing':'Declined';db.prepare('UPDATE work_orders SET stage=?,next_action=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(stage,b.choice==='Approve Repairs'?'Order required parts / begin authorized work':b.choice==='Diagnostics/Teardown Only'?'Complete diagnostic findings':'Prepare unit for declined-work pickup',a.work_order_id);const wo=workOrderView(a.work_order_id);await notify('approval_completed',wo,{choice:b.choice,signerName:String(b.signerName).trim(),signedAt:signed});audit(a.work_order_id,'customer','Approval completed',{choice:b.choice,signerName:String(b.signerName).trim()});return json(res,200,{ok:true});}
 
     if(p.startsWith('/api/'))return json(res,404,{error:'API route not found'});if(serveStatic(req,res,p))return;return serveStatic(req,res,'/')||text(res,404,'Not found');
-  }catch(e){console.error(e);if(!res.headersSent)json(res,500,{error:'Internal server error',detail:process.env.NODE_ENV==='production'?undefined:String(e.message||e)});else res.end();}
+  }catch(e){if(!res.headersSent)json(res,e.status||500,{error:e.status?e.message:'Internal server error',...(e.currentRevision?{currentRevision:e.currentRevision}:{}),detail:process.env.NODE_ENV==='production'?undefined:String(e.message||e)});else res.end();}
 });
 server.listen(PORT,HOST,()=>console.log(`Owner Tracker V11 listening on http://${HOST}:${PORT}`));
+let closing=false;
+function shutdown(){
+ if(closing)return;closing=true;
+ maintenance.stop();notifications.stop();
+ server.close(()=>{try{db.close();}finally{process.exit(0);}});
+ setTimeout(()=>process.exit(1),5000).unref();
+}
+process.once('SIGTERM',shutdown);
+process.once('SIGINT',shutdown);

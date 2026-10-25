@@ -1,6 +1,6 @@
 {
   "name": "ownertracker",
-  "version": "11.0.0-dev",
+  "version": "11.1.0-preview.1",
   "private": true,
   "engines": {
     "node": ">=22.16.0 <23"
@@ -11,6 +11,9 @@
     "test": "npm --prefix Windows-Server test",
     "check": "npm --prefix Windows-Server run check",
     "desktop-agent": "npm --prefix Windows-Server run desktop-agent",
-    "backup": "npm --prefix Windows-Server run backup"
+    "backup": "npm --prefix Windows-Server run backup",
+    "backup:encrypted": "npm --prefix Windows-Server run backup:encrypted",
+    "release:package": "npm --prefix Windows-Server run release:package",
+    "recover-owner": "npm --prefix Windows-Server run recover-owner"
   }
 }

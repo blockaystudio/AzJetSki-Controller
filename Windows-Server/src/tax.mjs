@@ -1,3 +1,4 @@
+import {effectiveAccountTotal} from './accounting.mjs';
 // Owner Tracker tax engine. Monetary amounts are integer cents, the tax rate is basis points.
 // Shop configuration: 9.10% as requested; accountant must certify taxable categories before go-live.
 const round = n => Math.round(Number(n)*100);
@@ -20,8 +21,9 @@ export function priceLines(lines,bps){let subtotal=0,taxable=0;for(const line of
 export function calcOrderTax(db,id,overrideLines=null){const w=db.prepare('SELECT id,tax_rate_bps FROM work_orders WHERE id=?').get(id);if(!w)throw Error('Work order not found');const lines=overrideLines||db.prepare('SELECT amount,taxable FROM work_order_lines WHERE work_order_id=?').all(id);return priceLines(lines,w.tax_rate_bps);}
 export function applyOrderTax(db,id,actor='system'){
  const p=calcOrderTax(db,id);const paid=db.prepare("SELECT COALESCE(SUM(CASE WHEN status='confirmed' THEN CASE WHEN direction='payment' THEN amount_cents ELSE -amount_cents END ELSE 0 END),0) AS paid FROM pos_payments WHERE work_order_id=?").get(id)?.paid||0;
- if(p.total_cents<paid)throw Error('Edited invoice total cannot be below already-confirmed payments');
- db.prepare('UPDATE work_orders SET subtotal_cents=?,tax_total_cents=?,estimate_total=?,paid_total=?,balance=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(p.subtotal_cents,p.tax_cents,dollar(p.total_cents),dollar(paid),dollar(p.total_cents-paid),id);
+ const effectiveTotal=effectiveAccountTotal(db,'repair',id,p.total_cents);
+ if(effectiveTotal<paid)throw Error('Edited invoice total after credits cannot be below already-confirmed payments');
+ db.prepare('UPDATE work_orders SET subtotal_cents=?,tax_total_cents=?,estimate_total=?,paid_total=?,balance=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(p.subtotal_cents,p.tax_cents,dollar(p.total_cents),dollar(paid),dollar(effectiveTotal-paid),id);
  db.prepare('INSERT INTO ot_tax_events(work_order_id,rate_bps,subtotal_cents,taxable_cents,tax_cents,actor) VALUES(?,?,?,?,?,?)').run(id,p.rate_bps,p.subtotal_cents,p.taxable_cents,p.tax_cents,actor);
  return p;
 }

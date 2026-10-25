@@ -1,0 +1,9 @@
+{
+  "name": "ownertracker-private-review-bridge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/bridge.test.mjs",
+    "bridge": "node bridge-client.mjs"
+  }
+}

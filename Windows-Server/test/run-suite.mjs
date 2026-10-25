@@ -46,11 +46,12 @@ try {
       env.DOCUSIGN_ENABLE_SEND = 'false';
       env.DOCUSIGN_POLICY_APPROVED = 'false';
       env.AUTO_SUPPLIER_LOOKUP = 'false';
+      env.REQUIRE_EDIT_REVISION = 'false';
       // Unit tests create their own temporary SQLite files; keep those disposable too.
       env.TMPDIR = env.TMP = env.TEMP = path.join(sandbox, 'tmp');
       fs.mkdirSync(env.TMPDIR);
 
-      run(process.execPath, ['--test', 'test/db.test.mjs', 'test/finance-controls.test.mjs', 'test/finance-ui.test.mjs', 'test/receipts.test.mjs', 'test/backup-restore.test.mjs'], sandbox, env);
+      run(process.execPath, ['--test', 'test/db.test.mjs', 'test/finance-controls.test.mjs', 'test/finance-ui.test.mjs', 'test/receipts.test.mjs', 'test/backup-restore.test.mjs', 'test/authorizations.test.mjs', 'test/access-security.test.mjs', 'test/customer-access.test.mjs', 'test/edit-revisions.test.mjs', 'test/accounting.test.mjs', 'test/shop-management.test.mjs', 'test/encrypted-backup.test.mjs', 'test/google-calendar-sync.test.mjs', 'test/package-release.test.mjs', 'test/service-notifications.test.mjs', 'test/shop-reports.test.mjs', 'test/shop-launch-api.test.mjs', 'test/purchase-policy.test.mjs'], sandbox, env);
       for (const script of ['run-v6.sh', 'run-billing-v9.sh', 'run-v10.sh', 'run-v11.sh']) {
         console.log(`\nRunning ${script}`);
         run('bash', [path.join('test', script)], sandbox, env);

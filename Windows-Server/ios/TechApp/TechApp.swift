@@ -36,8 +36,17 @@ struct TechWorkOrder:View {
     @State private var images:[PhotosPickerItem]=[]
     @State private var currentTab=0
     @State private var message=""
+    @State private var workflowStage="Intake"
+    @State private var nextAction=""
+    private let workflowStages=["Intake","Diagnosing","Awaiting Approval","Parts Ordered","In Progress","Quality Check","Ready"]
     var body:some View {Form {
         Section("Job") {Text(work.str("unit_label")).font(.headline);Text(work.str("customer_name"));Text(work.str("complaint"));Text(work.str("stage")).foregroundStyle(.secondary)}
+        Section("Workflow") {
+            Picker("Stage",selection:$workflowStage) {ForEach(workflowStages,id:\.self){stage in Text(stage).tag(stage)}}
+            TextField("Next action",text:$nextAction)
+            Button("Save Workflow"){Task{await saveWorkflow()}}.disabled(work.int("revision")==0)
+            Button("Refresh Work Order"){Task{await refresh()}}
+        }
         Picker("Activity",selection:$currentTab){Text("Photos & Updates").tag(0);Text("Private Notes").tag(1);Text("Parts Needed").tag(2)}.pickerStyle(.segmented)
         if currentTab==0 {
             Section("Customer-facing update") {
@@ -73,7 +82,8 @@ struct TechWorkOrder:View {
         }
         if !message.isEmpty{Section {Text(message).foregroundStyle(.secondary)}}
     }.navigationTitle("WO #" + String(id)).task{await refresh()}}
-    func refresh() async{do{work=(try await api.call("/api/work-orders/\(id)"))["workOrder"] as? [String:Any] ?? [:]}catch{message=error.localizedDescription}}
+    func refresh() async{do{work=(try await api.call("/api/work-orders/\(id)"))["workOrder"] as? [String:Any] ?? [:];workflowStage=work.str("stage");nextAction=work.str("next_action")}catch{message=error.localizedDescription}}
+    func saveWorkflow() async {do{_ = try await api.updateWorkOrder(id,changes:["stage":workflowStage,"next_action":nextAction],original:work);message="Workflow saved";await refresh()}catch{message=error.localizedDescription}}
     func saveNote() async {do{_ = try await api.call("/api/work-orders/\(id)/notes",method:"POST",body:["body":note]);note="";message="Internal note saved";await refresh()}catch{message=error.localizedDescription}}
     func requestPart() async {do{_ = try await api.call("/api/work-orders/\(id)/parts",method:"POST",body:["item_ref":partNumber,"description":partName,"qty_needed":Int(qty) ?? 1,"notes":partNote]);partName="";partNote="";message="Part request sent";await refresh()}catch{message=error.localizedDescription}}
     func sendUpdate() async {

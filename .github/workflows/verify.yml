@@ -18,6 +18,8 @@ jobs:
           node-version: '22'
       - run: npm run check
       - run: npm test
+      - name: Verify private review transport
+        run: node --test review-hosting/test/bridge.test.mjs
 
   windows-launcher:
     runs-on: ubuntu-latest

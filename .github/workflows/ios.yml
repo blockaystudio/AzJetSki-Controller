@@ -1,0 +1,43 @@
+name: Verify native iOS clients
+
+on:
+  push:
+    paths:
+      - 'Windows-Server/ios/**'
+      - '.github/workflows/ios.yml'
+  pull_request:
+    paths:
+      - 'Windows-Server/ios/**'
+      - '.github/workflows/ios.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unsigned-ios:
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        scheme: [OwnerTrackerOwner, OwnerTrackerTech]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+      - name: Generate Xcode project
+        working-directory: Windows-Server/ios
+        run: xcodegen generate --spec project.yml
+      - name: Compile unsigned simulator app
+        working-directory: Windows-Server/ios
+        run: >-
+          xcodebuild -project OwnerTrackerSuite.xcodeproj
+          -scheme '${{ matrix.scheme }}'
+          -sdk iphonesimulator -configuration Debug
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath '${{ runner.temp }}/${{ matrix.scheme }}'
+          CODE_SIGNING_ALLOWED=NO build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.scheme }}-unsigned-simulator
+          path: ${{ runner.temp }}/${{ matrix.scheme }}/Build/Products/Debug-iphonesimulator/*.app

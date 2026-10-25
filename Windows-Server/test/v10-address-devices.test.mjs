@@ -17,7 +17,7 @@ await call(`/api/pos/work-orders/${wo.id}/lines`,'POST',{line_type:'labor',descr
 let w=(await call(`/api/work-orders/${wo.id}`)).workOrder;
 assert.equal(w.estimate_total,309.1);assert.equal(w.tax_total_cents,910);assert.equal(w.tax_rate_bps,910);
 const auth=await call(`/api/pos/work-orders/${wo.id}/docusign/preview`,'GET',undefined,200,true);const pdf=Buffer.from(await auth.arrayBuffer());assert.ok(pdf.includes(Buffer.from('2024 W Sample Ave')));
-const invo=await call(`/api/pos/work-orders/${wo.id}/invoices`,'POST',{email:'example@example.com',sendEmail:true},201);assert.equal(invo.deliveryStatus,'not_sent_email_provider_unconfigured');
+const invo=await call(`/api/pos/work-orders/${wo.id}/invoices`,'POST',{email:'example@example.com',sendEmail:true},201);assert.equal(invo.deliveryStatus,'consent_required');
 const invoicePath=new URL(invo.link).pathname;
 let invoiceHtml=await (await call(invoicePath,'GET',undefined,200,true)).text();assert.match(invoiceHtml,/2024 W Sample Ave/);assert.match(invoiceHtml,/85027/);
 await call(`/api/pos/customers/${c.id}`,'PATCH',{address_line1:'999 New Road',address_line2:'',city:'Tempe',state:'AZ',postal_code:'85281',billing_same_as_service:false,billing_address_line1:'PO Box 111',billing_address_line2:'',billing_city:'Scottsdale',billing_state:'AZ',billing_postal_code:'85250'});
@@ -27,7 +27,7 @@ let deliveries=await call(`/api/pos/work-orders/${wo.id}/invoices`);assert.equal
 // A second invoice after changing billing address must contain a new, distinct immutable billing snapshot.
 const invo2=await call(`/api/pos/work-orders/${wo.id}/invoices`,'POST',{sendEmail:false},201);
 const invoice2=await (await call(new URL(invo2.link).pathname,'GET',undefined,200,true)).text();assert.match(invoice2,/PO Box 111/);assert.match(invoice2,/Scottsdale/);
-const v10db=new DatabaseSync(process.env.OWNERTRACKER_DB,{readOnly:true});const sent=v10db.prepare('SELECT status,provider FROM ot_invoice_deliveries WHERE invoice_id=?').get(invo.id);assert.equal(sent.status,'not_sent_email_provider_unconfigured');v10db.close();
+const v10db=new DatabaseSync(process.env.OWNERTRACKER_DB,{readOnly:true});const sent=v10db.prepare('SELECT status,provider FROM ot_invoice_deliveries WHERE invoice_id=?').get(invo.id);assert.equal(sent.status,'consent_required');v10db.close();
 const bytes=receiptBytes({shop:'Arizona Jet Ski',phone:'602-482-9322',job:w,lines:[{description:'Belt',qty:1,rate:100,amount:100}],payments:[],taxRateBps:910,customerAddress:['2024 W Sample Ave','Phoenix AZ 85027']});assert.ok(bytes.includes(Buffer.from('2024 W Sample Ave')));assert.ok(bytes.includes(Buffer.from('Sales tax (9.10%)')));assert.ok(bytes.includes(Buffer.from('9.10')));assert.equal(bytes.subarray(-3).toString('hex'),'1d5600');assert.equal(drawerPulse({pin:0}).toString('hex'),'1b7000197d');assert.equal(printerHost(),null);
 await call(`/api/pos/devices/receipt/${wo.id}`,'POST',{},409);
 await call('/api/pos/devices/drawer/open','POST',{confirm:false,reason:'open on manager request'},400);

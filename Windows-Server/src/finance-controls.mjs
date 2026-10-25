@@ -1,6 +1,7 @@
 // Local ledger controls. These operations record externally completed transactions;
 // they never call a merchant, bank or payment terminal.
 import crypto from 'node:crypto';
+import {effectiveAccountTotal} from './accounting.mjs';
 
 const config = {
   repair: { table: 'pos_payments', parent: 'work_order_id', actor: 'verified_by' },
@@ -97,7 +98,7 @@ function entity(db, scope, id) {
     : db.prepare('SELECT total_cents,invoice_issued_at FROM retail_special_orders WHERE id=?').get(id);
   if (!row) fail(404, 'Order not found');
   if (scope === 'retail' && !row.invoice_issued_at) fail(409, 'Issue the retail invoice before recording payments');
-  return scope === 'repair' ? Math.round(row.estimate_total * 100) : row.total_cents;
+  return effectiveAccountTotal(db, scope, id, scope === 'repair' ? Math.round(row.estimate_total * 100) : row.total_cents);
 }
 
 function net(db, scope, entityId) {
@@ -143,7 +144,7 @@ export function recordPayment(db, scope, entityId, user, input, totals) {
     }
     const total = entity(db, scope, entityId), paid = net(db, scope, entityId);
     const next = paid + (value.status === 'confirmed' ? (value.direction === 'payment' ? value.amount : -value.amount) : 0);
-    if (next < 0 || next > total) fail(409, 'Overpayment or excessive refund');
+    if (next < 0 || (value.direction === 'payment' && next > total) || (value.direction === 'refund' && next > paid)) fail(409, 'Overpayment or excessive refund');
     if (value.direction === 'refund') {
       const original = db.prepare(`SELECT * FROM ${table} WHERE id=? AND ${parent}=?`).get(value.originalPaymentId, entityId);
       if (!original || original.direction !== 'payment' || original.status !== 'confirmed' || original.voided_at || original.method !== value.method) fail(409, 'Refund must link to an original confirmed payment with the same method and order');

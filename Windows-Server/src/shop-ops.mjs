@@ -1,6 +1,10 @@
+import {makePurchaseTarget} from '../public/purchase-target.js';
+import {assertPurchaseAuthorized} from './shop-management.mjs';
+import {requireEditRevision} from './edit-revisions.mjs';
 // Owner Tracker V11: physical custody, counter queues, scheduling, and invoiced retail special orders.
 // All purchase submissions remain manual connector handoffs. Never represent a queued command as a completed purchase.
 import crypto from 'node:crypto';
+import {accountBalance} from './accounting.mjs';
 import {installFinancialControls,recordPayment,confirmPayment,voidPayment,financialEvents,paymentRows,canAuthorizeFinance} from './finance-controls.mjs';
 import {installReceiptSnapshots,captureRetailReceiptSnapshot} from './receipts.mjs';
 import {installGoogleCalendar,googleStatus,startGoogleAuth,completeGoogleAuth,pushAppointment,markSyncFailed,disconnectGoogle} from './google-calendar.mjs';
@@ -96,21 +100,21 @@ const receipt=(db,id)=>db.prepare(`SELECT r.*,c.name customer_name,c.phone,c.ema
 const lines=(db,id)=>db.prepare(`SELECT l.*,v.name vendor_name,v.code vendor_code FROM retail_special_lines l LEFT JOIN vendors v ON v.id=l.vendor_id WHERE l.retail_order_id=? ORDER BY l.id`).all(id);
 export function retailTotals(items,bps){let subtotal=0,taxable=0;for(const l of items){const ext=l.quantity*l.unit_price_cents;subtotal+=ext;if(l.taxable)taxable+=ext}const tax=Math.round(taxable*bps/10000);return {subtotal_cents:subtotal,tax_cents:tax,total_cents:subtotal+tax};}
 function recalc(db,id){const r=receipt(db,id);const t=retailTotals(lines(db,id),r.tax_bps);db.prepare('UPDATE retail_special_orders SET subtotal_cents=?,tax_cents=?,total_cents=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(t.subtotal_cents,t.tax_cents,t.total_cents,id);return t;}
-function retailPaymentTotals(db,id){const p=db.prepare("SELECT COALESCE(SUM(CASE WHEN status='confirmed' THEN CASE WHEN direction='payment' THEN amount_cents ELSE -amount_cents END ELSE 0 END),0) paid, COALESCE(SUM(CASE WHEN status='pending' THEN amount_cents ELSE 0 END),0) pending FROM retail_payments WHERE retail_order_id=? AND voided_at IS NULL").get(id);const r=receipt(db,id);return {...p,due:Math.max(0,r.total_cents-p.paid)};}
+function retailPaymentTotals(db,id){const r=receipt(db,id);if(!r)throw Error('Retail order not found');const t=accountBalance(db,'retail',id,r.total_cents);return {paid:t.netPaidCents,pending:t.pendingCents,due:t.dueCents,total:t.effectiveTotalCents,originalTotal:t.rawTotalCents,credits:t.creditCents,refundDue:t.refundDueCents};}
 function queues(db){
   const rows=db.prepare(`SELECT uc.status custody_status,uc.lot_location,uc.keys_tag,uc.checked_in_at,
     v.id vehicle_id,v.customer_id,v.year,v.make,v.model,v.vin,v.hin,c.name customer_name,c.phone,
-    w.id work_order_id,w.ref_number,w.stage,w.balance,w.estimate_total,w.promised_date
+    w.id work_order_id,w.ref_number,w.stage,w.balance,w.estimate_total,w.promised_date,w.source work_order_source
     FROM unit_custody uc JOIN vehicles v ON v.id=uc.vehicle_id JOIN customers c ON c.id=v.customer_id
     LEFT JOIN work_orders w ON w.id=uc.work_order_id WHERE uc.status='in_lot'
-    ORDER BY uc.checked_in_at ASC`).all();
-  const pending=rows.filter(r=>r.stage==='Ready'&&Number(r.balance||0)>0.005);
-  const pickup=rows.filter(r=>r.stage==='Ready'&&Number(r.balance||0)<=0.005);
+    ORDER BY uc.checked_in_at ASC`).all().map(row=>row.work_order_id&&row.work_order_source==='manual'?{...row,balance:accountBalance(db,'repair',row.work_order_id,Math.round(Number(row.estimate_total)*100)).dueCents/100,refundDue:accountBalance(db,'repair',row.work_order_id,Math.round(Number(row.estimate_total)*100)).refundDueCents/100}:row);
+  const pending=rows.filter(r=>r.stage==='Ready'&&(Number(r.balance||0)>0.005||Number(r.refundDue||0)>0.005));
+  const pickup=rows.filter(r=>r.stage==='Ready'&&Number(r.balance||0)<=0.005&&Number(r.refundDue||0)<=0.005);
   const retail=db.prepare(`SELECT r.id,r.invoice_number,r.status,r.total_cents,c.name customer_name,c.phone
      FROM retail_special_orders r JOIN customers c ON c.id=r.customer_id WHERE r.invoice_issued_at IS NOT NULL ORDER BY r.id DESC LIMIT 100`).all();
   const retailReady=retail.filter(r=>r.status==='ready_for_pickup').map(r=>({...r,payment:retailPaymentTotals(db,r.id)}));
   return {inLot:rows,paymentPending:pending,readyForPickup:pickup,
-    retailReadyForPickup:retailReady.filter(r=>r.payment.due===0),retailPaymentPending:retailReady.filter(r=>r.payment.due>0),checkedInCustomers:[...new Map(rows.map(r=>[r.customer_id,{id:r.customer_id,name:r.customer_name,phone:r.phone,vehicleCount:rows.filter(x=>x.customer_id===r.customer_id).length}])).values()]};
+    retailReadyForPickup:retailReady.filter(r=>r.payment.due===0&&r.payment.refundDue===0),retailPaymentPending:retailReady.filter(r=>r.payment.due>0||r.payment.refundDue>0),checkedInCustomers:[...new Map(rows.map(r=>[r.customer_id,{id:r.customer_id,name:r.customer_name,phone:r.phone,vehicleCount:rows.filter(x=>x.customer_id===r.customer_id).length}])).values()]};
 }
 function icsEscape(s){return str(s,500).replace(/\\/g,'\\\\').replace(/\n/g,'\\n').replace(/;/g,'\\;').replace(/,/g,'\\,');}
 const utcStamp=x=>new Date(x).toISOString().replace(/[-:]/g,'').replace(/\.\d{3}Z/,'Z');
@@ -125,6 +129,7 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
   const staff=()=>u&&allowedRoles.has(u.role);
   const purchasing=()=>u&&purchaserRoles.has(u.role);
   try{
+    if(p.startsWith('/api/shop/')&&p!=='/api/shop/google-calendar/callback'&&u&&!staff()&&!purchasing())return deny('shop_operations');
     if(p==='/api/shop/readiness'&&req.method==='GET'){
       if(!u||!['owner','manager'].includes(u.role))return deny('readiness');
       const pending=db.prepare("SELECT COUNT(*) n FROM retail_purchase_commands WHERE status='queued'").get().n;
@@ -164,8 +169,9 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
         return respond(200,{ok:true,status:'in_lot'});
       }
       if(current?.status!=='in_lot')return respond(409,{error:'Vehicle is not checked in'});
-      const wo=current.work_order_id?db.prepare('SELECT stage,balance FROM work_orders WHERE id=?').get(current.work_order_id):null;
-      if(wo&&(Number(wo.balance)>0.005||!['Ready','Picked Up','Closed'].includes(wo.stage)))return respond(409,{error:'Pickup blocked: repair must be Ready and payment settled'});
+      const wo=current.work_order_id?db.prepare('SELECT stage,balance,estimate_total,source FROM work_orders WHERE id=?').get(current.work_order_id):null;
+      const account=wo?.source==='manual'?accountBalance(db,'repair',current.work_order_id,Math.round(Number(wo.estimate_total)*100)):null;
+      if(wo&&((account?(account.dueCents>0||account.refundDueCents>0):Number(wo.balance)>0.005)||!['Ready','Picked Up','Closed'].includes(wo.stage)))return respond(409,{error:'Pickup blocked: repair must be Ready and payment settled'});
       db.exec('BEGIN');try{
         db.prepare("UPDATE unit_custody SET status='checked_out',checked_out_at=CURRENT_TIMESTAMP,checked_out_by=? WHERE vehicle_id=?").run(u.id,id);
         db.prepare('INSERT INTO custody_events(vehicle_id,work_order_id,action,actor_id,notes) VALUES(?,?,?,?,?)').run(id,current.work_order_id,'check_out',u.id,str(data.notes));
@@ -202,7 +208,7 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
       const conflict=db.prepare("SELECT id FROM shop_appointments WHERE status='scheduled' AND starts_at<? AND ends_at>? LIMIT 1").get(new Date(end).toISOString(),new Date(start).toISOString());
       const r=db.prepare('INSERT INTO shop_appointments(customer_id,vehicle_id,title,starts_at,ends_at,notes,created_by) VALUES(?,?,?,?,?,?,?)').run(d.customerId?Number(d.customerId):null,d.vehicleId?Number(d.vehicleId):null,title,new Date(start).toISOString(),new Date(end).toISOString(),str(d.notes),u.id);
       const id=Number(r.lastInsertRowid);
-      if(googleStatus(db).connected){try{await pushAppointment(db,id);return respond(201,{id,possibleOverlap:!!conflict,calendarSync:'synced'})}catch(e){markSyncFailed(db,id,e.message);return respond(201,{id,possibleOverlap:!!conflict,calendarSync:'error',syncError:e.message})}}
+      if(googleStatus(db).connected){try{const sync=await pushAppointment(db,id);return respond(201,{id,possibleOverlap:!!conflict,calendarSync:sync.synced?'synced':sync.status})}catch(e){markSyncFailed(db,id,e.message);return respond(201,{id,possibleOverlap:!!conflict,calendarSync:'error',syncError:e.message})}}
       return respond(201,{id,possibleOverlap:!!conflict,calendarSync:'not_connected'});
     }
     const cal=p.match(/^\/api\/shop\/schedule\/(\d+)\/ics$/);
@@ -224,11 +230,11 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
     }
     const ro=p.match(/^\/api\/shop\/retail-orders\/(\d+)$/);
     if(ro&&req.method==='GET'){
-      if(!u)return deny();const r=receipt(db,Number(ro[1]));return r?respond(200,{order:{...r,lines:lines(db,r.id),payments:paymentRows(db,'retail',r.id),paymentTotals:retailPaymentTotals(db,r.id),financialEvents:financialEvents(db,'retail',r.id),canRefund:canAuthorizeFinance(u),canVoid:canAuthorizeFinance(u)}}):respond(404,{error:'Not found'});
+      if(!staff()&&!purchasing())return deny('retail_read');const r=receipt(db,Number(ro[1]));return r?respond(200,{order:{...r,lines:lines(db,r.id),payments:paymentRows(db,'retail',r.id),paymentTotals:retailPaymentTotals(db,r.id),financialEvents:financialEvents(db,'retail',r.id),canRefund:canAuthorizeFinance(u),canVoid:canAuthorizeFinance(u)}}):respond(404,{error:'Not found'});
     }
     const line=p.match(/^\/api\/shop\/retail-orders\/(\d+)\/lines$/);
     if(line&&req.method==='POST'){
-      if(!staff())return deny('retail_sales');const id=Number(line[1]),r=receipt(db,id),d=await b();if(!r)return respond(404,{error:'Order not found'});
+      if(!staff())return deny('retail_sales');const id=Number(line[1]),r=receipt(db,id),d=await b();requireEditRevision(db,req,p,d);if(!r)return respond(404,{error:'Order not found'});
       if(r.invoice_issued_at)return respond(409,{error:'Invoice already issued; create a supplemental order instead of silently changing an invoice'});
       const qty=Number(d.quantity),description=str(d.description,350),cost=priceCents(d.unitCost??0),sell=priceCents(d.unitPrice??0);
       if(!Number.isInteger(qty)||qty<1||qty>1000||!description)return respond(400,{error:'Valid quantity and description required'});
@@ -239,7 +245,7 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
     }
     const invoice=p.match(/^\/api\/shop\/retail-orders\/(\d+)\/issue-invoice$/);
     if(invoice&&req.method==='POST'){
-      if(!staff())return deny('retail_sales');const id=Number(invoice[1]),r=receipt(db,id);if(!r)return respond(404,{error:'Not found'});
+      if(!staff())return deny('retail_sales');const editInput=await b();requireEditRevision(db,req,p,editInput);const id=Number(invoice[1]),r=receipt(db,id);if(!r)return respond(404,{error:'Not found'});
       if(r.invoice_issued_at)return respond(409,{error:'Invoice already issued'});
       if(!lines(db,id).length||r.total_cents<=0)return respond(409,{error:'A priced item is required'});
       const c=db.prepare('SELECT * FROM customers WHERE id=?').get(r.customer_id);
@@ -261,6 +267,7 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
       if(!r.invoice_issued_at)return respond(409,{error:'Issue a customer invoice before purchasing'});
       if(!l.vendor_id||!l.vendor_sku||l.unit_cost_cents<=0||!d.available||!d.fitment)return respond(409,{error:'Supplier, exact SKU, cost, availability and fitment are required'});
       if(l.vendor_sku.startsWith('DEMO-'))return respond(409,{error:'Demo SKUs cannot be ordered'});
+      requireEditRevision(db,req,p,d);
       db.prepare("UPDATE retail_special_lines SET verified_available=1,verified_fitment=1,status='verified' WHERE id=?").run(lid);
       audit(db,u,'Retail part verified',{invoice:r.invoice_number,lineId:lid,sku:l.vendor_sku});return respond(200,{ok:true});
     }
@@ -287,7 +294,8 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
       const next=str(d.status,40),allowed={queued:['ordered','backordered','cancelled'],ordered:['backordered','shipped','received'],backordered:['ordered','cancelled'],shipped:['received'],received:['picked_up']};
       if(!allowed[l.status]?.includes(next))return respond(409,{error:`Cannot change ${l.status} to ${next}`});
       if(['ordered','shipped','received'].includes(next)&&!str(d.supplierReference))return respond(409,{error:'Supplier order or receiving confirmation required'});
-      if(next==='picked_up'&&retailPaymentTotals(db,id).due>0)return respond(409,{error:'Cannot release customer parts with an unpaid balance'});
+      if(next==='picked_up'&&(retailPaymentTotals(db,id).due>0||retailPaymentTotals(db,id).refundDue>0))return respond(409,{error:'Cannot release customer parts with an unpaid balance'});
+      requireEditRevision(db,req,p,d);
       db.prepare("UPDATE retail_special_lines SET status=?,eta_text=COALESCE(NULLIF(?,''),eta_text) WHERE id=?").run(next,str(d.eta,180),lid);
       const statuses=lines(db,id).map(x=>x.status);
       if(statuses.every(x=>x==='received'||x==='picked_up'))db.prepare("UPDATE retail_special_orders SET status='ready_for_pickup',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id);
@@ -315,6 +323,7 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
       const snapshot={vendor:vendor.code,total_cents:total,reviewedBy:u.username,reviewedAt:new Date().toISOString(),lines:rs.map(l=>({lineId:l.id,invoiceNumber:l.invoice_number,orderId:l.retail_order_id,sku:l.vendor_sku,requestedSku:l.requested_sku,description:l.description,quantity:l.quantity,unitCostCents:l.unit_cost_cents}))};
       const raw=JSON.stringify(snapshot),sha=crypto.createHash('sha256').update(raw).digest('hex'),uuid=crypto.randomUUID();
       db.exec('BEGIN');try{
+        assertPurchaseAuthorized(db,u,total,[],d.purchaseApprovalId,'purchase',makePurchaseTarget('retail',vendorId,vendorId,rs));
         db.prepare('INSERT INTO retail_purchase_commands(command_uuid,vendor_id,snapshot_json,snapshot_sha256,reviewed_by) VALUES(?,?,?,?,?)').run(uuid,vendorId,raw,sha,u.id);
         db.prepare(`UPDATE retail_special_lines SET status='queued' WHERE id IN (${rs.map(()=>'?').join(',')})`).run(...rs.map(x=>x.id));
         audit(db,u,'Invoice-backed retail supplier cart queued',{uuid,vendor:vendor.code,total});db.exec('COMMIT');
@@ -349,6 +358,7 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
     if(p==='/api/shop/inventory-adjustments'&&req.method==='POST'){
       if(!purchasing())return deny('inventory_adjustment');const d=await b(),delta=Number(d.quantityDelta),reason=str(d.reason,80),sku=str(d.sku,100),refType=str(d.referenceType,40),refId=str(d.referenceId,100);
       if(!sku||!Number.isInteger(delta)||delta===0||!['received','sold','return','damage','cycle_count'].includes(reason)||!refType||!refId)return respond(400,{error:'SKU, signed quantity, reason, and documented reference required'});
+      if(reason==='return')return respond(409,{error:'Receive customer returns through Accounting with the original stock sale and credit note; manual return adjustments are disabled'});
       if(['damage','cycle_count'].includes(reason)&&!['owner','manager'].includes(u.role))return deny('inventory_writeoff_or_stock_count');
       if(reason==='received'&&(refType!=='supplier_order'||delta<0))return respond(409,{error:'Receiving stock requires positive quantities and a supplier order confirmation reference'});
       if(reason==='sold'){
