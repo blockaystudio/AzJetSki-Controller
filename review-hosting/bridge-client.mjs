@@ -108,11 +108,13 @@ export async function runBridge(input,{signal,log=message=>process.stderr.write(
   };
   let lastError=0,first=true;
   async function loop() {
+    let idleDelay=350;
     while(!signal?.aborted) {
       try {
         const {request:job}=await call('/__bridge/poll');
         if(first){first=false;log('Private review bridge connected. The complete application uses the isolated local review database.');}
-        if(!job){await sleep(700);continue;}
+        if(!job){await sleep(idleDelay);idleDelay=Math.min(5000,idleDelay*2);continue;}
+        idleDelay=350;
         let result;
         try {result=await executeLocal(config,job);}
         catch {result={id:job.id,claimToken:job.claimToken,status:502,headers:[['content-type','application/json; charset=utf-8'],['cache-control','no-store']],bodyBase64:Buffer.from(JSON.stringify({error:'The isolated review application could not complete the request. Reload its record before retrying.'})).toString('base64')};}
