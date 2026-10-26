@@ -192,6 +192,7 @@ def run(base):
             page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] [name=verified]').check()
             page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] button').click()
             expect(page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] [name=amount]')).to_have_value('')
+            expect(page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] button')).to_be_enabled()
         paid = api(page, f"/api/shop/retail-orders/{order['id']}")['order']
         assert paid['paymentTotals']['due'] == 0
         assert len(paid['payments']) == 2

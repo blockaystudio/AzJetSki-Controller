@@ -2,7 +2,7 @@
 
 Updated 2026-10-26. Read this first; load only the relevant source or handoff.
 
-Current follow-up: preview.4 adds desktop Sales/Calendar entry, scheduling customer creation/search, and private Google OAuth configuration helper. Owner explicitly asked to WAIT for the QuickBooks export, which they will add to Drive. No legacy data has been merged. Google OAuth client is not yet created; connection is not active. See `SHOP_DESKTOP_ROLLOUT.md`.
+Current follow-up: preview.4 adds desktop Sales/Calendar entry, scheduling customer creation/search, and private Google OAuth configuration helper. Owner explicitly asked to WAIT for the QuickBooks export, which they will add to Drive. Shared recovery chat is now read; its schema and archive features are incorporated in `/legacy.html` with a staff-only read-only adapter. Actual ZIP and active customer merging remain pending; no real records have been merged. Google OAuth client is not yet created; connection is not active. See `SHOP_DESKTOP_ROLLOUT.md`.
 
 ## Goal and decisions
 

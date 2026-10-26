@@ -1,3 +1,4 @@
+import {legacyArchiveRoutes} from './legacy-archive.mjs';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -89,6 +90,7 @@ function requirePermission(req,res,permission) { const u=requireUser(req,res); i
 function requireBridge(req,res) { if((req.headers.authorization||'') !== `Bearer ${BRIDGE_TOKEN}`){json(res,401,{error:'Invalid bridge token'});return false;} return true; }
 function audit(workOrderId, actor, action, detail='') { db.prepare('INSERT INTO audit_log(work_order_id,actor,action,detail) VALUES(?,?,?,?)').run(workOrderId||null,actor,action,typeof detail==='string'?detail:JSON.stringify(detail)); }
 
+const legacyRouter=legacyArchiveRoutes({currentUser,json});
 const posRouter=posRoutes({db,currentUser,json,readBody,bridgeToken:AGENT_TOKEN});
 const checkoutRouter=checkoutRoutes({db,currentUser,json,readBody,publicBaseUrl:PUBLIC_BASE_URL,shopName:SHOP_NAME,notify:(event,wo,extra)=>notifications.queueEvent(event,wo,extra)});
 const deviceRouter=deviceRoutes({db,currentUser,json,readBody,shopName:SHOP_NAME,shopPhone:SHOP_PHONE});
@@ -442,7 +444,7 @@ const server=http.createServer(async(req,res)=>{
     if(apMedia&&req.method==='GET'){const a=db.prepare('SELECT * FROM approvals WHERE token_hash=?').get(publicHash(apMedia[1]));if(!a)return text(res,404,'Not found');const m=db.prepare("SELECT * FROM media WHERE id=? AND work_order_id=? AND customer_visible=1 AND (scope='approval' OR approval_id=?)").get(Number(apMedia[2]),a.work_order_id,a.id);if(!m)return text(res,404,'Not found');return serveMediaRecord(res,m);}
     if(ap&&req.method==='POST'){const a=db.prepare(`SELECT a.*,w.ref_number,w.customer_name,w.phone,w.email FROM approvals a JOIN work_orders w ON w.id=a.work_order_id WHERE a.token_hash=?`).get(publicHash(ap[1]));if(!a)return json(res,404,{error:'Approval link not found'});if(a.status==='completed')return json(res,409,{error:'Approval already completed'});const b=await readBody(req),choices=['Approve Repairs','Diagnostics/Teardown Only','Decline Repairs'];if(!choices.includes(b.choice)||!b.agree||!String(b.signerName||'').trim())return json(res,400,{error:'Choice, legal name, and agreement are required'});const signed=new Date().toISOString();db.prepare('UPDATE approvals SET status=?,choice=?,signer_name=?,signed_at=? WHERE id=?').run('completed',b.choice,String(b.signerName).trim(),signed,a.id);const stage=b.choice==='Approve Repairs'?'In Progress':b.choice==='Diagnostics/Teardown Only'?'Diagnosing':'Declined';db.prepare('UPDATE work_orders SET stage=?,next_action=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(stage,b.choice==='Approve Repairs'?'Order required parts / begin authorized work':b.choice==='Diagnostics/Teardown Only'?'Complete diagnostic findings':'Prepare unit for declined-work pickup',a.work_order_id);const wo=workOrderView(a.work_order_id);await notify('approval_completed',wo,{choice:b.choice,signerName:String(b.signerName).trim(),signedAt:signed});audit(a.work_order_id,'customer','Approval completed',{choice:b.choice,signerName:String(b.signerName).trim()});return json(res,200,{ok:true});}
 
-    if(p.startsWith('/api/'))return json(res,404,{error:'API route not found'});if(serveStatic(req,res,p))return;return serveStatic(req,res,'/')||text(res,404,'Not found');
+    if(await legacyRouter(req,res,p))return;if(p.startsWith('/api/'))return json(res,404,{error:'API route not found'});if(serveStatic(req,res,p))return;return serveStatic(req,res,'/')||text(res,404,'Not found');
   }catch(e){if(!res.headersSent)json(res,e.status||500,{error:e.status?e.message:'Internal server error',...(e.currentRevision?{currentRevision:e.currentRevision}:{}),detail:process.env.NODE_ENV==='production'?undefined:String(e.message||e)});else res.end();}
 });
 server.listen(PORT,HOST,()=>console.log(`Owner Tracker V11 listening on http://${HOST}:${PORT}`));
