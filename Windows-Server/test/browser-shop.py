@@ -90,6 +90,29 @@ def run(base):
                         page.locator(f'[data-tab="{tab}"]').click()
                         no_overflow(page, f'management/{tab} at {width}')
         # Guided repair intake, contextual accounts and retained approvals use the real server.
+        page.goto(base+'/desktop.html')
+        page.get_by_role('link',name='Open Calendar',exact=True).click()
+        page.locator('#newScheduleCustomer').wait_for()
+        page.locator('#newAppointment [name=title]').fill('Fictional scheduling intake')
+        form=page.locator('#newScheduleCustomer')
+        for name,value in {'name':'Fictional Calendar Customer','phone':'602-555-0129','email':'calendar@example.test','address_line1':'123 Fictional Way','city':'Phoenix','state':'AZ','postal_code':'85001'}.items():
+            form.locator(f'[name={name}]').fill(value)
+        form.get_by_role('button',name='Create and select customer').click()
+        expect(form.locator('[data-result]')).to_contain_text('Customer saved and selected')
+        expect(page.locator('#newAppointment [name=title]')).to_have_value('Fictional scheduling intake')
+        selected=page.locator('#newAppointment [name=customerId]').input_value()
+        assert selected
+        page.locator('#newAppointment [name=startsAt]').fill('2027-02-01T10:00')
+        page.locator('#newAppointment [name=endsAt]').fill('2027-02-01T11:00')
+        page.locator('#newAppointment button').click()
+        expect(page.locator('#ops-main')).to_contain_text('Fictional scheduling intake')
+        appointments=api(page,'/api/shop/schedule')['appointments']
+        assert any(a['title']=='Fictional scheduling intake' and str(a['customer_id'])==selected for a in appointments)
+        for width in (390,768,1440):
+            page.set_viewport_size({'width':width,'height':900})
+            no_overflow(page,'New scheduling customer')
+        page.goto(base+'/calendar-setup.html')
+        expect(page.locator('#callback')).to_have_text(base+'/api/shop/google-calendar/callback')
         run_workspace_journeys(page, base, ARTIFACTS, api, no_overflow)
         # Keyboard navigation remains available from the work-order list.
         visit(page, base, '/?view=workorders', '#list a.job-link')

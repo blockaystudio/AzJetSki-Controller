@@ -200,8 +200,8 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
     }
     if(p==='/api/shop/google-calendar/callback'&&req.method==='GET'){
       // Google cross-site redirect will not carry our strict session cookie; one-time OAuth state is authorization.
-      try{const c=await completeGoogleAuth(db,url.searchParams.get('code'),url.searchParams.get('state'));res.writeHead(302,{location:'/shop-ops.html?calendar=connected'});res.end();return true}
-      catch(e){res.writeHead(302,{location:'/shop-ops.html?calendar=failed'});res.end();return true}
+      try{const c=await completeGoogleAuth(db,url.searchParams.get('code'),url.searchParams.get('state'));res.writeHead(302,{location:'/shop-ops.html?tab=schedule&calendar=connected'});res.end();return true}
+      catch(e){res.writeHead(302,{location:'/shop-ops.html?tab=schedule&calendar=failed'});res.end();return true}
     }
     if(p==='/api/shop/google-calendar/disconnect'&&req.method==='POST'){
       if(!u||!['owner','manager'].includes(u.role))return deny('calendar_admin');return respond(200,disconnectGoogle(db));

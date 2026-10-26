@@ -37,7 +37,7 @@ export function googleStatus(db){const conn=db.prepare('SELECT email,connected_a
 export function startGoogleAuth(db,userId){const c=conf();if(!googleCalendarConfig().configured)throw Error('Google Calendar OAuth credentials and HTTPS callback not configured');
  const state=crypto.randomBytes(32).toString('base64url');db.prepare('DELETE FROM google_oauth_states WHERE expires_at<CURRENT_TIMESTAMP').run();
  db.prepare("INSERT INTO google_oauth_states(state_hash,initiated_by,expires_at) VALUES(?,?,datetime('now','+10 minutes'))").run(digest(state),userId);
- const p=new URLSearchParams({client_id:c.clientId,redirect_uri:c.callback,response_type:'code',scope:'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email openid',access_type:'offline',prompt:'consent',state});
+ const p=new URLSearchParams({client_id:c.clientId,redirect_uri:c.callback,response_type:'code',login_hint:c.expectedEmail,scope:'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email openid',access_type:'offline',prompt:'consent',state});
  return oauth.authorize+'?'+p;
 }
 export async function completeGoogleAuth(db,code,state){if(!code||!state)throw Error('Missing OAuth code/state');const row=db.prepare('SELECT * FROM google_oauth_states WHERE state_hash=? AND expires_at>CURRENT_TIMESTAMP').get(digest(state));if(!row)throw Error('Expired or invalid calendar OAuth state');

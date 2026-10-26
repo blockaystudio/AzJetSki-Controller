@@ -2,6 +2,8 @@
 
 Updated 2026-10-26. Read this first; load only the relevant source or handoff.
 
+Current follow-up: preview.4 adds desktop Sales/Calendar entry, scheduling customer creation/search, and private Google OAuth configuration helper. Owner explicitly asked to WAIT for the QuickBooks export, which they will add to Drive. No legacy data has been merged. Google OAuth client is not yet created; connection is not active. See `SHOP_DESKTOP_ROLLOUT.md`.
+
 ## Goal and decisions
 
 - One AZ Jet Ski shop; repairs and counter parts sales have equal priority.

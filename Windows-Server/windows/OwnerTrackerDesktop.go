@@ -291,12 +291,14 @@ func runDesktop(ctx context.Context, dir string) error {
 	default:
 	}
 	fmt.Println("Owner Tracker V11 desktop / POS is ready")
-	fmt.Println("POS:", config.baseURL)
+	fmt.Println("Shop desktop:", config.baseURL+"/desktop.html")
+	fmt.Println("Sales / POS:", config.baseURL+"/shop-ops.html?tab=retail")
+	fmt.Println("Calendar:", config.baseURL+"/shop-ops.html?tab=schedule")
 	fmt.Println("Shop operations:", config.baseURL+"/shop-ops.html")
 	fmt.Println("Owner / technician:", config.baseURL+"/owner.html", config.baseURL+"/tech.html")
 	fmt.Println("Payments:", config.baseURL+"/billing.html")
 	fmt.Println("Leave this console open. Press Ctrl+C here to stop the server and desktop receiver.")
-	browser := exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", config.baseURL)
+	browser := exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", config.baseURL+"/desktop.html")
 	if err := browser.Start(); err != nil {
 		fmt.Println("Open the POS URL above in your browser.")
 	} else {

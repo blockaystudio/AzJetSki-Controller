@@ -1,12 +1,14 @@
 # OwnerTracker V11
 
-**Current: single-shop review release 11.1.0-preview.3.** [Open the private review](https://azjetski-ownertracker-review.wholeclock.chatgpt.site) · [Job workspace and server preparation](docs/WORKSPACE_MILESTONE_2026-10-26.md) · [Compact project checkpoint](docs/PROJECT_STATE.md). The review uses fictional records and requires its managed runtime to remain active.
+**Current: single-shop review release 11.1.0-preview.4.** [Open the private review](https://azjetski-ownertracker-review.wholeclock.chatgpt.site) · [Job workspace and server preparation](docs/WORKSPACE_MILESTONE_2026-10-26.md) · [Compact project checkpoint](docs/PROJECT_STATE.md). The review uses fictional records and requires its managed runtime to remain active.
 
 **October 26 assessment:** [Correctness findings, feature simplification and UI development plan](docs/PROJECT_ASSESSMENT_2026-10-26.md). The identified corrections are implemented in preview.2; preview.3 adds guided intake, job tabs and shared repair/counter accounts. Automated and browser results are recorded in the milestone. Real shop acceptance and permanent hosting remain pending.
 
 One Windows POS/server with a shared SQLite database, desktop order receiver, owner and technician web clients, and native iOS source for AZ Jet Ski, Boats & Powersports.
 
 The supplied **Complete Suite** and **Windows POS** ZIPs contain the same 80 files after removing the Complete Suite's outer `OwnerTracker-V11/` directory. This repository combines them without duplicating the server or databases. Original V11 installation, acceptance, release and long-term planning documents are retained. See [assembly provenance](docs/ASSEMBLY.md).
+
+New desktop entry: `/desktop.html` provides Sales / POS, Calendar, Customers / Repairs and receipt/account shortcuts. Scheduling includes new-customer creation and directory search. See [tomorrow’s shop setup](docs/SHOP_DESKTOP_ROLLOUT.md). QuickBooks migration awaits the owner’s export; Google Calendar awaits OAuth setup and owner consent.
 
 ## Install on Windows
 
