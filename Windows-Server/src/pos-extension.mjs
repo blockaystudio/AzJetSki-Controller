@@ -7,8 +7,9 @@ import {assertPurchaseAuthorized} from './shop-management.mjs';
 import crypto from 'node:crypto';
 import {accountBalance} from './accounting.mjs';
 import {installEditRevisions,requireEditRevision} from './edit-revisions.mjs';
-import {installTax,shopTaxBps,defaultTaxable,applyOrderTax,calcOrderTax} from './tax.mjs';
+import {installTax,shopTaxBps,defaultTaxable,applyOrderTax,validateOrderTax,assertManualRepairAccount,repairFinancialFields} from './tax.mjs';
 import {installFinancialControls,recordPayment,confirmPayment,voidPayment,financialEvents,paymentRows,canAuthorizeFinance} from './finance-controls.mjs';
+import {assertJobIdentityChange,assertJobStageChange,jobIdentityFields} from './job-policy.mjs';
 
 export function extendDatabase(db) {
   installTax(db);
@@ -80,8 +81,7 @@ export function extendDatabase(db) {
 const asText=(v,max=4000)=>String(v??'').trim().slice(0,max);
 const num=v=>{const x=Number(v);return Number.isFinite(x)?x:0;};
 const cents=v=>{ if(typeof v==='string'&&!/^\d+(?:\.\d{1,2})?$/.test(v.trim()))throw new Error('Amount must have at most two decimal places'); const n=Number(v); if(!Number.isFinite(n)||n<=0||n>1000000)throw new Error('Amount must be positive and at most $1,000,000');return Math.round(n*100); };
-function paymentTotals(db, id){const sums=db.prepare(`SELECT COALESCE(SUM(CASE WHEN status='confirmed' THEN CASE WHEN direction='payment' THEN amount_cents ELSE -amount_cents END ELSE 0 END),0) confirmed_cents,COALESCE(SUM(CASE WHEN status='pending' AND direction='payment' THEN amount_cents ELSE 0 END),0) pending_cents FROM pos_payments WHERE work_order_id=? AND voided_at IS NULL`).get(id);return sums;}
-function syncBalance(db,id){const x=db.prepare('SELECT estimate_total FROM work_orders WHERE id=?').get(id);if(!x)throw new Error('Work order not found');const t=accountBalance(db,'repair',id,Math.round(x.estimate_total*100));db.prepare('UPDATE work_orders SET paid_total=?,balance=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(t.netPaidCents/100,t.dueCents/100,id);return {paid:t.netPaidCents/100,balance:t.dueCents/100,pending:t.pendingCents/100,total:t.effectiveTotalCents/100,originalTotal:t.rawTotalCents/100,credits:t.creditCents/100,refundDue:t.refundDueCents/100};}
+function syncBalance(db,id){const x=assertManualRepairAccount(db,id);const t=accountBalance(db,'repair',id,Math.round(x.estimate_total*100));db.prepare('UPDATE work_orders SET paid_total=?,balance=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(t.netPaidCents/100,t.dueCents/100,id);return {paid:t.netPaidCents/100,balance:t.dueCents/100,pending:t.pendingCents/100,total:t.effectiveTotalCents/100,originalTotal:t.rawTotalCents/100,credits:t.creditCents/100,refundDue:t.refundDueCents/100};}
 
 const isOwner=u=>u&&['owner','manager'].includes(u.role);
 const directoryRead=u=>u&&['owner','manager','service_writer','advisor','parts'].includes(u.role);
@@ -124,6 +124,25 @@ function woMeta(db,customerId,vehicleId){
   return {customer,vehicle,label:[vehicle.year,vehicle.make,vehicle.model].filter(Boolean).join(' ')||vehicle.category};
 }
 function audit(db,id,u,action,detail){db.prepare('INSERT INTO audit_log(work_order_id,actor,action,detail) VALUES(?,?,?,?)').run(id||null,u.username,action,JSON.stringify(detail).slice(0,6000));}
+function transaction(db,fn){db.exec('BEGIN IMMEDIATE');try{const result=fn();db.exec('COMMIT');return result;}catch(error){db.exec('ROLLBACK');throw error;}}
+function identitySnapshot(row){return Object.fromEntries(jobIdentityFields.map(key=>[key,row[key]??null]));}
+function preserveJobIdentity(db,old,changes){try{assertJobIdentityChange(db,old,changes);return false;}catch(error){if(error.status===409)return true;throw error;}}
+function saleLine(body,old={}){
+  const line={line_type:asText(body.line_type??old.line_type??'part'),item_ref:asText(body.item_ref??old.item_ref),description:asText(body.description??old.description),qty:Number(body.qty??old.qty??1),rate:Number(body.rate??old.rate??0),cost:Number(body.cost??old.cost??0)};
+  if(!['part','labor','service','other'].includes(line.line_type)||!line.description||!Number.isFinite(line.qty)||line.qty<=0||line.qty>10000||!Number.isFinite(line.rate)||line.rate<0||!Number.isFinite(line.cost)||line.cost<0)throw Object.assign(Error('Invalid sale line quantity, price, cost or description'),{status:400});
+  line.amount=Math.round(line.qty*line.rate*100)/100;
+  line.taxable=body.taxable===undefined?(old.line_type===line.line_type?old.taxable:Number(defaultTaxable(line.line_type))):Number(body.taxable===true||body.taxable===1||body.taxable==='on'||body.taxable==='true');
+  return line;
+}
+function updateLineParts(db,workOrderId,id,line){
+  if(line?.line_type==='part'){
+    db.prepare(`INSERT INTO part_requirements(work_order_id,source,source_key,item_ref,description,qty_needed,sell_price,status) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(work_order_id,source_key) DO UPDATE SET item_ref=excluded.item_ref,description=excluded.description,qty_needed=excluded.qty_needed,sell_price=excluded.sell_price`).run(workOrderId,'pos',`pos-line-${id}`,line.item_ref,line.description,line.qty,line.amount,'needs_source');
+  }else db.prepare('DELETE FROM part_requirements WHERE work_order_id=? AND source_key=?').run(workOrderId,`pos-line-${id}`);
+}
+function updateLineTotals(db,id,actor){
+  db.prepare(`UPDATE work_orders SET parts_total=(SELECT COALESCE(SUM(ROUND(amount*100)),0)/100.0 FROM work_order_lines WHERE work_order_id=? AND line_type='part'),labor_total=(SELECT COALESCE(SUM(ROUND(amount*100)),0)/100.0 FROM work_order_lines WHERE work_order_id=? AND line_type='labor'),updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(id,id,id);
+  applyOrderTax(db,id,actor);
+}
 function fullCustomer(db,id){const c=db.prepare('SELECT * FROM customers WHERE id=?').get(id);if(!c)return null;c.vehicles=db.prepare('SELECT * FROM vehicles WHERE customer_id=? AND archived=0 ORDER BY id DESC').all(id);c.workOrders=db.prepare('SELECT id,ref_number,stage,estimate_total,vehicle_id,created_at FROM work_orders WHERE customer_id=? ORDER BY id DESC').all(id);return c;}
 
 export function posRoutes({db, currentUser, json, readBody, requireBridge, bridgeToken, auditLog}){
@@ -149,12 +168,18 @@ export function posRoutes({db, currentUser, json, readBody, requireBridge, bridg
       const cm=p.match(/^\/api\/pos\/customers\/(\d+)$/);
       if(cm&&req.method==='GET'){if(!requireRole(directoryRead))return deny('customer_read');const x=fullCustomer(db,Number(cm[1]));return x?respond(200,{customer:x}):respond(404,{error:'Not found'});}
       if(cm&&req.method==='PATCH'){
-        if(!requireRole(customerEdit))return deny('customer_edit');const id=Number(cm[1]),old=fullCustomer(db,id);
-        if(!old)return respond(404,{error:'Not found'});
-        const b=normalizedCustomer(await body(),old);requireEditRevision(db,req,p,b);
-        if(Object.hasOwn(b,'name')&&!asText(b.name))return respond(400,{error:'Customer name required'});
-        updateCols(db,'customers',id,b,customerCols);const edited=db.prepare('SELECT * FROM customers WHERE id=?').get(id);
-        db.prepare('INSERT INTO audit_log(work_order_id,actor,action,detail) VALUES(?,?,?,?)').run(null,u.username,'Customer profile updated',JSON.stringify({customerId:id,changedFields:Object.keys(b)}));db.prepare("UPDATE work_orders SET customer_name=?,phone=?,email=?,updated_at=CURRENT_TIMESTAMP WHERE customer_id=? AND source='manual' AND stage NOT IN ('Closed','Picked Up','Declined')").run(edited.name,edited.phone,edited.email,id);return respond(200,{customer:fullCustomer(db,id)});
+        if(!requireRole(customerEdit))return deny('customer_edit');const id=Number(cm[1]),input=await body();
+        transaction(db,()=>{
+          requireEditRevision(db,req,p,input);const old=fullCustomer(db,id),b=normalizedCustomer(input,old);
+          if(Object.hasOwn(b,'name')&&!asText(b.name))throw Object.assign(Error('Customer name required'),{status:400});
+          updateCols(db,'customers',id,b,customerCols);const edited=db.prepare('SELECT * FROM customers WHERE id=?').get(id),preservedJobIds=[];
+          for(const job of db.prepare("SELECT * FROM work_orders WHERE customer_id=? AND source='manual' AND stage NOT IN ('Closed','Picked Up','Declined')").all(id)){
+            const preserve=preserveJobIdentity(db,job,{customer_name:edited.name});if(preserve)preservedJobIds.push(job.id);
+            db.prepare('UPDATE work_orders SET customer_name=?,phone=?,email=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(preserve?job.customer_name:edited.name,edited.phone,edited.email,job.id);
+          }
+          audit(db,null,u,'Customer profile updated',{customerId:id,changedFields:Object.keys(b),preservedJobIds});
+        });
+        return respond(200,{customer:fullCustomer(db,id)});
       }
       if(p==='/api/pos/vehicles'&&req.method==='GET'){
         if(!requireRole(directoryRead))return deny('vehicle_read');const cid=Number(url.searchParams.get('customerId')||0);
@@ -168,20 +193,31 @@ export function posRoutes({db, currentUser, json, readBody, requireBridge, bridg
       }
       const vm=p.match(/^\/api\/pos\/vehicles\/(\d+)$/);
       if(vm&&req.method==='PATCH'){
-        if(!requireRole(customerEdit))return deny('customer_edit');const id=Number(vm[1]),b=await body(),old=db.prepare('SELECT * FROM vehicles WHERE id=? AND archived=0').get(id);
-        if(!old)return respond(404,{error:'Vehicle not found'});requireEditRevision(db,req,p,b);
-        if(Object.hasOwn(b,'customer_id')&&Number(b.customer_id)!==old.customer_id){
-          if(db.prepare('SELECT COUNT(*) n FROM work_orders WHERE vehicle_id=?').get(id).n) return respond(409,{error:'Cannot transfer a vehicle with work orders; preserve history'});
-          if(!db.prepare('SELECT id FROM customers WHERE id=? AND archived=0').get(Number(b.customer_id)))return respond(400,{error:'Customer not found'});
-          db.prepare('UPDATE vehicles SET customer_id=? WHERE id=?').run(Number(b.customer_id),id);
-        }
-        if(vehicleCols.some(k=>Object.hasOwn(b,k))){updateCols(db,'vehicles',id,b,vehicleCols);const v=db.prepare('SELECT * FROM vehicles WHERE id=?').get(id);db.prepare("UPDATE work_orders SET year=?,make=?,model=?,unit_label=?,serial=?,updated_at=CURRENT_TIMESTAMP WHERE vehicle_id=? AND source='manual' AND stage NOT IN ('Closed','Picked Up','Declined')").run(v.year,v.make,v.model,[v.year,v.make,v.model].filter(Boolean).join(' '),v.vin||v.hin,id)}
+        if(!requireRole(customerEdit))return deny('customer_edit');const id=Number(vm[1]),b=await body();
+        transaction(db,()=>{
+          requireEditRevision(db,req,p,b);const old=db.prepare('SELECT * FROM vehicles WHERE id=? AND archived=0').get(id);
+          if(!old)throw Object.assign(Error('Vehicle not found'),{status:404});
+          if(Object.hasOwn(b,'customer_id')&&Number(b.customer_id)!==old.customer_id){
+            if(db.prepare('SELECT COUNT(*) n FROM work_orders WHERE vehicle_id=?').get(id).n)throw Object.assign(Error('Cannot transfer a vehicle with work orders; preserve history'),{status:409});
+            if(!db.prepare('SELECT id FROM customers WHERE id=? AND archived=0').get(Number(b.customer_id)))throw Object.assign(Error('Customer not found'),{status:400});
+            db.prepare('UPDATE vehicles SET customer_id=? WHERE id=?').run(Number(b.customer_id),id);
+          }
+          const preservedJobIds=[];
+          if(vehicleCols.some(k=>Object.hasOwn(b,k))){
+            updateCols(db,'vehicles',id,b,vehicleCols);const v=db.prepare('SELECT * FROM vehicles WHERE id=?').get(id),changes={year:v.year,make:v.make,model:v.model,unit_label:[v.year,v.make,v.model].filter(Boolean).join(' ')||v.category,serial:v.vin||v.hin};
+            for(const job of db.prepare("SELECT * FROM work_orders WHERE vehicle_id=? AND source='manual' AND stage NOT IN ('Closed','Picked Up','Declined')").all(id)){
+              if(preserveJobIdentity(db,job,changes)){preservedJobIds.push(job.id);continue;}
+              db.prepare('UPDATE work_orders SET year=?,make=?,model=?,unit_label=?,serial=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(changes.year,changes.make,changes.model,changes.unit_label,changes.serial,job.id);
+            }
+          }
+          audit(db,null,u,'Vehicle profile updated',{vehicleId:id,changedFields:Object.keys(b),preservedJobIds});
+        });
         return respond(200,{vehicle:db.prepare('SELECT * FROM vehicles WHERE id=?').get(id)});
       }
       if(p==='/api/pos/work-orders'&&req.method==='POST'){
         if(!requireRole(customerEdit))return deny('create_order');const b=await body();
         const {customer,vehicle,label}=woMeta(db,num(b.customer_id),num(b.vehicle_id));
-        const stage=asText(b.stage)||'Intake';if(!validStages.has(stage))return respond(400,{error:'Invalid stage'});
+        const stage=asText(b.stage)||'Intake';if(!validStages.has(stage))return respond(400,{error:'Invalid stage'});assertJobStageChange(null,stage);
         const ref=asText(b.ref_number,100)||`OT-${Date.now()}`;
         const r=db.prepare(`INSERT INTO work_orders(source,ref_number,customer_id,vehicle_id,customer_name,phone,email,unit_label,year,make,model,serial,complaint,authorized_work,stage,estimate_total,paid_total,balance,date_opened,priority,tax_rate_bps) VALUES('manual',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,date('now'),?,?)`).run(ref,customer.id,vehicle.id,customer.name,customer.phone,customer.email,label,vehicle.year,vehicle.make,vehicle.model,vehicle.vin||vehicle.hin,asText(b.complaint),asText(b.authorized_work),stage,num(b.estimate_total),0,num(b.estimate_total),asText(b.priority)||'normal',shopTaxBps(db));
         const id=Number(r.lastInsertRowid);db.prepare("UPDATE unit_custody SET work_order_id=? WHERE vehicle_id=? AND status='in_lot'").run(id,vehicle.id);audit(db,id,u,'Created work order',{ref,customerId:customer.id,vehicleId:vehicle.id});return respond(201,{id,ref_number:ref});
@@ -189,58 +225,65 @@ export function posRoutes({db, currentUser, json, readBody, requireBridge, bridg
       const wom=p.match(/^\/api\/pos\/work-orders\/(\d+)$/);
       if(wom&&req.method==='PATCH'){
         if(!requireRole(customerEdit))return deny('work_order_edit');const id=Number(wom[1]),b=await body();
-        const old=db.prepare('SELECT * FROM work_orders WHERE id=?').get(id);if(!old)return respond(404,{error:'Work order not found'});requireEditRevision(db,req,p,b);
-        if(b.stage&&!validStages.has(b.stage))return respond(400,{error:'Invalid stage'});if(Object.hasOwn(b,'paid_total'))return respond(400,{error:'Payments must be recorded through payment ledger, not edited on work order'});if(Object.hasOwn(b,'estimate_total')&&Math.round(num(b.estimate_total)*100)<paymentTotals(db,id).confirmed_cents)return respond(409,{error:'Invoice total cannot be less than confirmed payments; refund first'});
-        if(Object.hasOwn(b,'estimate_total')&&db.prepare('SELECT COUNT(*) n FROM work_order_lines WHERE work_order_id=?').get(id).n>0)return respond(409,{error:'Itemized work-order total is calculated from sales lines and tax. Edit individual sale lines instead.'});
-        if(Object.hasOwn(b,'customer_id')||Object.hasOwn(b,'vehicle_id')){
-          const m=woMeta(db,num(b.customer_id??old.customer_id),num(b.vehicle_id??old.vehicle_id));
-          db.prepare('UPDATE work_orders SET customer_id=?,vehicle_id=?,customer_name=?,phone=?,email=?,unit_label=?,year=?,make=?,model=?,serial=? WHERE id=?').run(m.customer.id,m.vehicle.id,m.customer.name,m.customer.phone,m.customer.email,m.label,m.vehicle.year,m.vehicle.make,m.vehicle.model,m.vehicle.vin||m.vehicle.hin,id);
-        }
-        if(orderCols.some(k=>Object.hasOwn(b,k)))updateCols(db,'work_orders',id,b,orderCols);
-        if(Object.hasOwn(b,'estimate_total'))syncBalance(db,id);
-        audit(db,id,u,'Edited work order',b);return respond(200,{ok:true,id});
+        transaction(db,()=>{
+          requireEditRevision(db,req,p,b);const old=db.prepare('SELECT * FROM work_orders WHERE id=?').get(id);
+          if(repairFinancialFields.some(key=>Object.hasOwn(b,key)))assertManualRepairAccount(db,id);
+          if(Object.hasOwn(b,'stage')&&!validStages.has(b.stage))throw Object.assign(Error('Invalid stage'),{status:400});assertJobStageChange(old,b.stage);
+          if(Object.hasOwn(b,'paid_total'))throw Object.assign(Error('Payments must be recorded through payment ledger, not edited on work order'),{status:400});
+          if(repairFinancialFields.some(key=>key!=='estimate_total'&&Object.hasOwn(b,key)))throw Object.assign(Error('Calculated totals must be changed through sale lines and the payment ledger'),{status:400});
+          if(Object.hasOwn(b,'estimate_total')){
+            if(db.prepare('SELECT COUNT(*) n FROM work_order_lines WHERE work_order_id=?').get(id).n>0)throw Object.assign(Error('Itemized work-order total is calculated from sales lines and tax. Edit individual sale lines instead.'),{status:409});
+            const account=accountBalance(db,'repair',id,Math.round(Number(b.estimate_total)*100));
+            if(account.refundDueCents>0)throw Object.assign(Error('Invoice total after credits cannot be less than confirmed payments; refund first'),{status:409});
+          }
+          let identityChanged=false;
+          if((Object.hasOwn(b,'customer_id')&&num(b.customer_id)!==Number(old.customer_id))||(Object.hasOwn(b,'vehicle_id')&&num(b.vehicle_id)!==Number(old.vehicle_id))){
+            const m=woMeta(db,num(b.customer_id??old.customer_id),num(b.vehicle_id??old.vehicle_id));
+            const changes={customer_id:m.customer.id,vehicle_id:m.vehicle.id,customer_name:m.customer.name,unit_label:m.label,year:m.vehicle.year,make:m.vehicle.make,model:m.vehicle.model,serial:m.vehicle.vin||m.vehicle.hin};
+            identityChanged=assertJobIdentityChange(db,old,changes);
+            db.prepare('UPDATE work_orders SET customer_id=?,vehicle_id=?,customer_name=?,phone=?,email=?,unit_label=?,year=?,make=?,model=?,serial=? WHERE id=?').run(m.customer.id,m.vehicle.id,m.customer.name,m.customer.phone,m.customer.email,m.label,m.vehicle.year,m.vehicle.make,m.vehicle.model,m.vehicle.vin||m.vehicle.hin,id);
+          }
+          if(orderCols.some(k=>Object.hasOwn(b,k)))updateCols(db,'work_orders',id,b,orderCols);
+          if(Object.hasOwn(b,'estimate_total'))syncBalance(db,id);
+          audit(db,id,u,identityChanged?'Job identity corrected':'Edited work order',identityChanged?{changes:b,before:identitySnapshot(old),after:identitySnapshot(db.prepare('SELECT * FROM work_orders WHERE id=?').get(id))}:b);
+        });
+        return respond(200,{ok:true,id});
       }
       const linesM=p.match(/^\/api\/pos\/work-orders\/(\d+)\/lines$/);
       if(linesM&&req.method==='POST'){
-        if(!requireRole(customerEdit))return deny('work_order_lines');const id=Number(linesM[1]),b=await body();requireEditRevision(db,req,p,b);
-        if(!db.prepare('SELECT id FROM work_orders WHERE id=?').get(id))return respond(404,{error:'Not found'});
-        const type=asText(b.line_type)||'part';if(!['part','labor','service','other'].includes(type))return respond(400,{error:'Invalid type'});
-        if(!asText(b.description))return respond(400,{error:'Description required'});
-        const qty=num(b.qty)||1,rate=num(b.rate),amount=Math.round(qty*rate*100)/100;if(qty<=0||qty>10000||rate<0||!Number.isFinite(amount))return respond(400,{error:'Invalid quantity or price'});const existingSum=db.prepare('SELECT COALESCE(SUM(amount),0) n FROM work_order_lines WHERE work_order_id=?').get(id).n;if(Math.round((existingSum+amount)*100)<paymentTotals(db,id).confirmed_cents)return respond(409,{error:'Sale lines total cannot be below confirmed payments'});
-        const r=db.prepare('INSERT INTO work_order_lines(work_order_id,line_type,item_ref,description,qty,rate,amount,cost,taxable) VALUES(?,?,?,?,?,?,?,?,?)').run(id,type,asText(b.item_ref),asText(b.description),qty,rate,amount,num(b.cost),b.taxable===undefined?Number(defaultTaxable(type)):Number(b.taxable===true||b.taxable==='on'||b.taxable==='true'));
-        if(type==='part'){
-          db.prepare('INSERT INTO part_requirements(work_order_id,source,source_key,item_ref,description,qty_needed,sell_price,status) VALUES(?,?,?,?,?,?,?,?)').run(id,'pos',`pos-line-${r.lastInsertRowid}`,asText(b.item_ref),asText(b.description),qty,amount,'needs_source');
-        }
-        db.prepare(`UPDATE work_orders SET parts_total=(SELECT COALESCE(SUM(amount),0) FROM work_order_lines WHERE work_order_id=? AND line_type='part'),labor_total=(SELECT COALESCE(SUM(amount),0) FROM work_order_lines WHERE work_order_id=? AND line_type='labor'),updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(id,id,id);
-        applyOrderTax(db,id,u.username);audit(db,id,u,'Added sale line',b);return respond(201,{ok:true,id:Number(r.lastInsertRowid)});
+        if(!requireRole(customerEdit))return deny('work_order_lines');const id=Number(linesM[1]),b=await body();
+        const lineId=transaction(db,()=>{
+          requireEditRevision(db,req,p,b);
+          const line=saleLine(b),lines=db.prepare('SELECT amount,taxable FROM work_order_lines WHERE work_order_id=?').all(id);
+          validateOrderTax(db,id,[...lines,line]);
+          const r=db.prepare('INSERT INTO work_order_lines(work_order_id,line_type,item_ref,description,qty,rate,amount,cost,taxable) VALUES(?,?,?,?,?,?,?,?,?)').run(id,line.line_type,line.item_ref,line.description,line.qty,line.rate,line.amount,line.cost,line.taxable);
+          const insertedId=Number(r.lastInsertRowid);updateLineParts(db,id,insertedId,line);
+          updateLineTotals(db,id,u.username);audit(db,id,u,'Added sale line',b);return insertedId;
+        });
+        return respond(201,{ok:true,id:lineId});
       }
 
       // Sale lines can be edited until procurement/order receiving begins.
       const lineM=p.match(/^\/api\/pos\/lines\/(\d+)$/);
       if(lineM&&['PATCH','DELETE'].includes(req.method)){
         if(!requireRole(customerEdit))return deny('work_order_lines');
-        const id=Number(lineM[1]),old=db.prepare('SELECT * FROM work_order_lines WHERE id=?').get(id);
-        if(!old)return respond(404,{error:'Sale line not found'});
-        const pr=db.prepare('SELECT * FROM part_requirements WHERE work_order_id=? AND source_key=?').get(old.work_order_id,`pos-line-${id}`);
-        if(pr&&(pr.qty_ordered>0||pr.qty_received>0||db.prepare('SELECT COUNT(*) n FROM procurement_cart_lines WHERE part_requirement_id=?').get(pr.id).n>0))return respond(409,{error:'Part is already in a supplier cart or ordered; reverse procurement before editing'});
-        if(req.method==='DELETE'){
-          const b=await body();requireEditRevision(db,req,p,b);
-          const linesTotal=db.prepare('SELECT COALESCE(SUM(amount),0) n FROM work_order_lines WHERE work_order_id=?').get(old.work_order_id).n;if(Math.round((linesTotal-old.amount)*100)<paymentTotals(db,old.work_order_id).confirmed_cents)return respond(409,{error:'Removing line would leave invoice below confirmed payments'});
-          db.prepare('DELETE FROM part_requirements WHERE work_order_id=? AND source_key=?').run(old.work_order_id,`pos-line-${id}`);db.prepare('DELETE FROM work_order_lines WHERE id=?').run(id);
-          audit(db,old.work_order_id,u,'Deleted uncommitted sale line',{id,old});
-        }else{
-          const b=await body();requireEditRevision(db,req,p,b);const type=asText(b.line_type??old.line_type),desc=asText(b.description??old.description),item=asText(b.item_ref??old.item_ref),qty=num(b.qty??old.qty),rate=num(b.rate??old.rate),cost=num(b.cost??old.cost);
-          if(!['part','labor','service','other'].includes(type)||!desc||qty<=0)return respond(400,{error:'Invalid sale line'});
-          const amount=Math.round(qty*rate*100)/100;const linesTotal=db.prepare('SELECT COALESCE(SUM(amount),0) n FROM work_order_lines WHERE work_order_id=?').get(old.work_order_id).n;if(Math.round((linesTotal-old.amount+amount)*100)<paymentTotals(db,old.work_order_id).confirmed_cents)return respond(409,{error:'Edited lines would leave invoice below confirmed payments'});
-          db.prepare('UPDATE work_order_lines SET line_type=?,item_ref=?,description=?,qty=?,rate=?,amount=?,cost=?,taxable=? WHERE id=?').run(type,item,desc,qty,rate,amount,cost,b.taxable===undefined?(old.line_type===type?old.taxable:Number(defaultTaxable(type))):Number(b.taxable===true||b.taxable==='on'||b.taxable==='true'),id);
-          if(type==='part'){
-            db.prepare(`INSERT INTO part_requirements(work_order_id,source,source_key,item_ref,description,qty_needed,sell_price,status) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(work_order_id,source_key) DO UPDATE SET item_ref=excluded.item_ref,description=excluded.description,qty_needed=excluded.qty_needed,sell_price=excluded.sell_price`).run(old.work_order_id,'pos',`pos-line-${id}`,item,desc,qty,amount,'needs_source');
-          } else if(pr)db.prepare('DELETE FROM part_requirements WHERE id=?').run(pr.id);
-          audit(db,old.work_order_id,u,'Edited sale line',{id,b});
-        }
-        db.prepare(`UPDATE work_orders SET parts_total=(SELECT COALESCE(SUM(amount),0) FROM work_order_lines WHERE work_order_id=? AND line_type='part'),labor_total=(SELECT COALESCE(SUM(amount),0) FROM work_order_lines WHERE work_order_id=? AND line_type='labor'),updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(old.work_order_id,old.work_order_id,old.work_order_id);
-        applyOrderTax(db,old.work_order_id,u.username);
-        return respond(200,{ok:true,workOrderId:old.work_order_id});
+        const id=Number(lineM[1]),b=await body();
+        const workOrderId=transaction(db,()=>{
+          requireEditRevision(db,req,p,b);
+          const old=db.prepare('SELECT * FROM work_order_lines WHERE id=?').get(id);
+          const pr=db.prepare('SELECT * FROM part_requirements WHERE work_order_id=? AND source_key=?').get(old.work_order_id,`pos-line-${id}`);
+          if(pr&&(pr.qty_ordered>0||pr.qty_received>0||db.prepare('SELECT COUNT(*) n FROM procurement_cart_lines WHERE part_requirement_id=?').get(pr.id).n>0))throw Object.assign(Error('Part is already in a supplier cart or ordered; reverse procurement before editing'),{status:409});
+          const line=req.method==='DELETE'?null:saleLine(b,old),remaining=db.prepare('SELECT amount,taxable FROM work_order_lines WHERE work_order_id=? AND id<>?').all(old.work_order_id,id);
+          validateOrderTax(db,old.work_order_id,line?[...remaining,line]:remaining);
+          updateLineParts(db,old.work_order_id,id,line);
+          if(line){
+            db.prepare('UPDATE work_order_lines SET line_type=?,item_ref=?,description=?,qty=?,rate=?,amount=?,cost=?,taxable=? WHERE id=?').run(line.line_type,line.item_ref,line.description,line.qty,line.rate,line.amount,line.cost,line.taxable,id);
+          }else db.prepare('DELETE FROM work_order_lines WHERE id=?').run(id);
+          updateLineTotals(db,old.work_order_id,u.username);
+          audit(db,old.work_order_id,u,line?'Edited sale line':'Deleted uncommitted sale line',line?{id,b}:{id,old});
+          return old.work_order_id;
+        });
+        return respond(200,{ok:true,workOrderId});
       }
       // POS records transactions only. Dejavoo processes cards on its own terminal;
       // this endpoint NEVER handles card numbers and does not charge the terminal.

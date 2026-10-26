@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import {sendInvoiceMail, smtpConfigured} from './shop-mail.mjs';
+import {appendStockMovement,stockRequestKey} from './inventory-movements.mjs';
 
 const staff = new Set(['owner','manager','advisor','service_writer','parts']);
 const managers = new Set(['owner','manager']);
@@ -10,7 +11,14 @@ const integer = (v,label,min=1,max=100000000) => {const n=Number(v);if(!Number.i
 const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const keyOf = body => {const key=text(body.idempotencyKey??body.idempotency_key,140);if(key.length<8)fail(400,'An idempotency key of at least eight characters is required');return key;};
 const audit = (db,u,action,detail,wo=null) => db.prepare('INSERT INTO audit_log(work_order_id,actor,action,detail) VALUES(?,?,?,?)').run(wo,u.username,action,JSON.stringify(detail));
-function tx(db,fn){db.exec('BEGIN IMMEDIATE');try{const result=fn();db.exec('COMMIT');return result;}catch(error){db.exec('ROLLBACK');throw error;}}
+// Nested queue writes belong to the appointment transaction; outer commands
+// still acquire their write lock before reading any mutable state.
+function tx(db,fn){
+  const nested=db.isTransaction;
+  db.exec(nested?'SAVEPOINT shop_management':'BEGIN IMMEDIATE');
+  try{const result=fn();db.exec(nested?'RELEASE shop_management':'COMMIT');return result;}
+  catch(error){db.exec(nested?'ROLLBACK TO shop_management':'ROLLBACK');if(nested)db.exec('RELEASE shop_management');throw error;}
+}
 const tableExists=(db,name)=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
 
 export function installShopManagement(db){
@@ -88,6 +96,19 @@ export function installShopManagement(db){
   if(!appt.has('management_revision'))db.exec('ALTER TABLE shop_appointments ADD COLUMN management_revision INTEGER NOT NULL DEFAULT 1');
   const outbox=new Set(db.prepare('PRAGMA table_info(customer_message_outbox)').all().map(c=>c.name));
   if(!outbox.has('sending_started_at'))db.exec('ALTER TABLE customer_message_outbox ADD COLUMN sending_started_at TEXT');
+  if(!outbox.has('appointment_id'))db.exec('ALTER TABLE customer_message_outbox ADD COLUMN appointment_id INTEGER REFERENCES shop_appointments(id)');
+  if(!outbox.has('appointment_revision'))db.exec('ALTER TABLE customer_message_outbox ADD COLUMN appointment_revision INTEGER');
+  db.exec(`CREATE INDEX IF NOT EXISTS outbox_appointment ON customer_message_outbox(appointment_id);
+    CREATE TRIGGER IF NOT EXISTS reminder_binding_immutable BEFORE UPDATE ON customer_message_outbox
+      WHEN OLD.appointment_id IS NOT NEW.appointment_id OR OLD.appointment_revision IS NOT NEW.appointment_revision
+      BEGIN SELECT RAISE(ABORT,'Reminder appointment binding is immutable'); END;
+    CREATE TRIGGER IF NOT EXISTS appointment_invalidates_reminders AFTER UPDATE ON shop_appointments
+      WHEN OLD.management_revision IS NOT NEW.management_revision OR OLD.status IS NOT NEW.status
+        OR OLD.starts_at IS NOT NEW.starts_at OR OLD.ends_at IS NOT NEW.ends_at
+        OR OLD.title IS NOT NEW.title OR OLD.customer_id IS NOT NEW.customer_id
+      BEGIN UPDATE customer_message_outbox SET status='cancelled',next_attempt_at=NULL,
+        last_error='Appointment changed; prepare a reminder for the current appointment'
+        WHERE appointment_id=NEW.id AND status IN ('draft','queued','waiting_provider','retry_wait','consent_required','provider_failed','needs_review'); END;`);
   const approvals=new Set(db.prepare('PRAGMA table_info(purchase_approval_requests)').all().map(c=>c.name));
   if(!approvals.has('target_json'))db.exec("ALTER TABLE purchase_approval_requests ADD COLUMN target_json TEXT NOT NULL DEFAULT ''");
   if(!approvals.has('target_sha256'))db.exec("ALTER TABLE purchase_approval_requests ADD COLUMN target_sha256 TEXT NOT NULL DEFAULT ''");
@@ -175,14 +196,22 @@ export function enqueueCustomerMessage(db,user,input){
   const scheduled=input.sendAfter?Date.parse(input.sendAfter):null;
   if(scheduled!==null&&!Number.isFinite(scheduled))fail(400,'Invalid scheduled send time');
   const sendAfter=scheduled===null?null:new Date(scheduled).toISOString();
-  const fingerprint=hash({customerId,category:input.category,recipient,subject,message,link,sendAfter,draft:input.draft===true});
+  const appointmentId=input.appointmentId==null?null:integer(input.appointmentId,'Appointment ID');
+  const appointmentRevision=input.appointmentRevision==null?null:integer(input.appointmentRevision,'Appointment revision');
+  if((appointmentId===null)!==(appointmentRevision===null))fail(400,'Reminder appointment ID and revision are both required');
+  if(appointmentId!==null&&input.category!=='service')fail(400,'Appointment reminders require the service category');
+  const fingerprint=hash({customerId,category:input.category,recipient,subject,message,link,sendAfter,draft:input.draft===true,...(appointmentId===null?{}:{appointmentId,appointmentRevision})});
   return tx(db,()=>{
     const old=db.prepare('SELECT * FROM customer_message_outbox WHERE idempotency_key=?').get(key);
     if(old){if(old.fingerprint!==fingerprint)fail(409,'Message key already used with different details');return {...old,duplicate:true};}
+    if(appointmentId!==null){
+      const appointment=db.prepare('SELECT * FROM shop_appointments WHERE id=?').get(appointmentId);
+      if(!appointment||appointment.status!=='scheduled'||appointment.management_revision!==appointmentRevision||appointment.customer_id!==customerId)fail(409,'Appointment changed; prepare a reminder for its current revision');
+    }
     const consent=db.prepare('SELECT * FROM customer_contact_consents WHERE customer_id=?').get(customerId);
     const permitted=consent?.[input.category==='marketing'?'marketing_email':'service_email']===1;
     const status=input.draft===true?'draft':permitted?'queued':'consent_required';
-    const row=db.prepare('INSERT INTO customer_message_outbox(customer_id,category,recipient,subject,message,link,status,created_by,idempotency_key,fingerprint,next_attempt_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(customerId,input.category,recipient,subject,message,link,status,user.id,key,fingerprint,sendAfter);
+    const row=db.prepare('INSERT INTO customer_message_outbox(customer_id,category,recipient,subject,message,link,status,created_by,idempotency_key,fingerprint,next_attempt_at,appointment_id,appointment_revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(customerId,input.category,recipient,subject,message,link,status,user.id,key,fingerprint,sendAfter,appointmentId,appointmentRevision);
     audit(db,user,'Customer message queued',{messageId:Number(row.lastInsertRowid),customerId,category:input.category,status});
     return db.prepare('SELECT * FROM customer_message_outbox WHERE id=?').get(Number(row.lastInsertRowid));
   });
@@ -214,7 +243,19 @@ async function sendMessage(message,customer){
     return {status:'provider_accepted',reference:response.headers.get('x-message-id')||''};
   }
   const result=await sendInvoiceMail({to:message.recipient,name:customer.name,shop:process.env.SHOP_NAME||'Owner Tracker',subject:message.subject,message:content,link:message.link});
-  return result.status==='accepted_by_smtp'?{status:'provider_accepted',reference:'smtp_accepted'}:{status:'waiting_provider'};
+  if(result.status==='accepted_by_smtp')return {status:'provider_accepted',reference:'smtp_accepted'};
+  if(result.status==='not_sent_smtp_not_configured')return {status:'waiting_provider'};
+  return result;
+}
+
+// Recheck the immutable binding immediately before claim/send, and before staff
+// queue or retry actions. Cancelled reminders stay terminal across consent changes.
+function reminderCurrent(db,row,now=new Date()){
+  if(row.appointment_id==null)return true;
+  const appointment=db.prepare('SELECT * FROM shop_appointments WHERE id=?').get(row.appointment_id);
+  if(appointment?.status==='scheduled'&&appointment.management_revision===row.appointment_revision&&appointment.customer_id===row.customer_id&&Date.parse(appointment.starts_at)>now.getTime())return true;
+  if(!['provider_accepted','delivery_unknown','sending'].includes(row.status))db.prepare("UPDATE customer_message_outbox SET status='cancelled',next_attempt_at=NULL,last_error='Appointment changed or passed; prepare a current reminder' WHERE id=?").run(row.id);
+  return false;
 }
 
 export async function dispatchOutboxMessage(db,user,id,{mailProvider=sendMessage,providerConfigured=providerReady(),now=()=>new Date()}={}){
@@ -222,6 +263,7 @@ export async function dispatchOutboxMessage(db,user,id,{mailProvider=sendMessage
     const row=db.prepare('SELECT * FROM customer_message_outbox WHERE id=?').get(integer(id,'Message ID'));
     if(!row)fail(404,'Message not found');
     if(row.status==='provider_accepted')return {...row,alreadyAccepted:true};
+    if(row.status==='cancelled'||!reminderCurrent(db,row,now()))return {...row,status:row.status==='delivery_unknown'||row.status==='sending'?row.status:'cancelled',blocked:true,notice:'Appointment reminder is no longer current; it will not be sent'};
     if(!['queued','waiting_provider','retry_wait','consent_required'].includes(row.status))fail(409,'Message is not eligible for delivery; unknown delivery outcomes require explicit review');
     if(row.next_attempt_at&&Date.parse(row.next_attempt_at)>now().getTime())fail(409,'Message retry is not due yet');
     const consent=db.prepare('SELECT * FROM customer_contact_consents WHERE customer_id=?').get(row.customer_id);
@@ -268,25 +310,26 @@ export function startOutboxWorker(db,{intervalMs=60000,...options}={}){
 
 export function receiveStock(db,user,lineId,input){
   if(!['receive','return'].includes(input.operation||'receive'))fail(400,'Stock operation must be receive or return');
-  const operation=input.operation==='return'?'return':'receive',quantity=integer(input.quantity,'Quantity',1,100000),reference=text(input.reference,180),reason=text(input.reason,500),key=keyOf(input);
+  const operation=input.operation==='return'?'return':'receive',quantity=integer(input.quantity,'Quantity',1,100000),reference=text(input.reference,180),reason=text(input.reason,500),key=stockRequestKey(input);
+  if(String(input.reference??'').trim().length>180||String(input.reason??'').trim().length>500)fail(400,'Supplier reference or reason is too long');
   if(reference.length<3||(operation==='return'&&reason.length<5))fail(400,'Supplier receiving/return reference and return reason are required');
   if(operation==='return'&&!managers.has(user.role))fail(403,'Manager/owner permission required for supplier returns');
   const fingerprint=hash({lineId:Number(lineId),operation,quantity,reference,reason});
   return tx(db,()=>{
     const prior=db.prepare('SELECT * FROM stock_operations WHERE idempotency_key=?').get(key);
-    if(prior){if(prior.fingerprint!==fingerprint)fail(409,'Stock key reused with different details');return {...prior,duplicate:true};}
+    if(prior){if(prior.fingerprint!==fingerprint)fail(409,'Stock key reused with different details');return {id:prior.id,inventoryAdjustmentId:db.prepare('SELECT id FROM inventory_adjustments WHERE idempotency_key=?').get(key)?.id??null,operation:prior.operation,quantity:prior.quantity,stockAdded:prior.operation==='receive'?prior.quantity:-prior.quantity,duplicate:true};}
     const line=db.prepare('SELECT l.*,o.supplier_reference FROM receiving_order_lines l JOIN receiving_orders o ON o.id=l.order_id WHERE l.id=?').get(integer(lineId,'Receiving line ID'));
     if(!line)fail(404,'Receiving line not found');
     if(operation==='receive'&&line.received_quantity+quantity>line.ordered_quantity)fail(409,'Receiving quantity exceeds the remaining purchase order quantity');
     const onHand=db.prepare('SELECT COALESCE(SUM(quantity_delta),0) n FROM inventory_adjustments WHERE item_sku=?').get(line.sku).n;
     if(operation==='return'&&(line.returned_quantity+quantity>line.received_quantity||quantity>onHand))fail(409,'Return exceeds physically received or available stock');
+    const movement=appendStockMovement(db,user,{sku:line.sku,quantityDelta:operation==='receive'?quantity:-quantity,reason:operation==='receive'?'received':'return',referenceType:operation==='receive'?'supplier_order':'supplier_return',referenceId:reference,receivingLineId:line.id,idempotencyKey:key,source:'supplier',details:{operation,reason}});
     const row=db.prepare('INSERT INTO stock_operations(line_id,operation,quantity,reference,reason,actor_id,actor_username,idempotency_key,fingerprint) VALUES(?,?,?,?,?,?,?,?,?)').run(line.id,operation,quantity,reference,reason,user.id,user.username,key,fingerprint);
     db.prepare(`UPDATE receiving_order_lines SET ${operation==='receive'?'received_quantity':'returned_quantity'}=${operation==='receive'?'received_quantity':'returned_quantity'}+? WHERE id=?`).run(quantity,line.id);
-    db.prepare('INSERT INTO inventory_adjustments(item_sku,quantity_delta,reason,reference_type,reference_id,actor_id) VALUES(?,?,?,?,?,?)').run(line.sku,operation==='receive'?quantity:-quantity,operation==='receive'?'received':'return',operation==='receive'?'supplier_order':'supplier_return',reference,user.id);
     const complete=!db.prepare('SELECT id FROM receiving_order_lines WHERE order_id=? AND received_quantity<ordered_quantity LIMIT 1').get(line.order_id);
     db.prepare('UPDATE receiving_orders SET status=? WHERE id=?').run(complete?'received':'partially_received',line.order_id);
     audit(db,user,operation==='receive'?'Stock physically received':'Stock returned to supplier',{lineId:line.id,sku:line.sku,quantity,reference,reason});
-    return {id:Number(row.lastInsertRowid),operation,quantity,stockAdded:operation==='receive'?quantity:-quantity};
+    return {id:Number(row.lastInsertRowid),inventoryAdjustmentId:movement.id,operation,quantity,stockAdded:operation==='receive'?quantity:-quantity};
   });
 }
 
@@ -302,7 +345,7 @@ function integrationInventory(){
   ];
 }
 
-export function shopManagementRoutes({db,currentUser,json,readBody,mailProvider,calendarChange,preferencesSigningKey=process.env.EMAIL_PREFERENCES_SIGNING_KEY||process.env.OWNERTRACKER_SESSION_SECRET||''}){
+export function shopManagementRoutes({db,currentUser,json,readBody,mailProvider,calendarChange,notify,preferencesSigningKey=process.env.EMAIL_PREFERENCES_SIGNING_KEY||process.env.OWNERTRACKER_SESSION_SECRET||''}){
   installShopManagement(db);
   return async function route(req,res,p,url){
     const preference=p.match(/^\/email-preferences\/([^/]+)$/);
@@ -389,6 +432,7 @@ export function shopManagementRoutes({db,currentUser,json,readBody,mailProvider,
       if(queue&&req.method==='POST'){
         manager();const d=await body();if(d.confirmQueue!==true)fail(400,'Explicit queue confirmation required');
         const row=db.prepare('SELECT * FROM customer_message_outbox WHERE id=?').get(Number(queue[1]));if(!row)fail(404,'Message not found');if(row.status!=='draft')fail(409,'Only a draft may be queued');
+        if(!reminderCurrent(db,row))fail(409,'Appointment changed or passed; prepare a current reminder');
         const consent=db.prepare('SELECT * FROM customer_contact_consents WHERE customer_id=?').get(row.customer_id),permitted=consent?.[row.category==='marketing'?'marketing_email':'service_email']===1;
         db.prepare('UPDATE customer_message_outbox SET status=? WHERE id=?').run(permitted?'queued':'consent_required',row.id);audit(db,user,'Draft customer email queued',{messageId:row.id});return respond(200,{ok:true,status:permitted?'queued':'consent_required'});
       }
@@ -396,6 +440,7 @@ export function shopManagementRoutes({db,currentUser,json,readBody,mailProvider,
       if(retry&&req.method==='POST'){
         manager();const d=await body();if(d.acknowledgePossibleDuplicate!==true||text(d.reason).length<5)fail(400,'Review provider history, acknowledge possible duplicate and provide reason');
         const row=db.prepare('SELECT * FROM customer_message_outbox WHERE id=?').get(Number(retry[1]));if(!row)fail(404,'Message not found');if(!['provider_failed','delivery_unknown','sending','retry_wait'].includes(row.status))fail(409,'Only failed/uncertain attempts can be reviewed for retry');
+        if(!reminderCurrent(db,row))fail(409,'Appointment changed or passed; this reminder cannot be retried');
         if(row.status==='sending'&&row.sending_started_at&&Date.parse(row.sending_started_at)>Date.now()-300000)fail(409,'The provider attempt may still be active; wait at least five minutes before reviewing an interrupted attempt');
         db.prepare("UPDATE customer_message_outbox SET status='queued',next_attempt_at=NULL,last_error='' WHERE id=?").run(row.id);audit(db,user,'Uncertain email retry explicitly authorized',{messageId:row.id,reason:text(d.reason)});return respond(200,{ok:true,notice:'Queued for another attempt; no email sent by this action'});
       }
@@ -414,7 +459,12 @@ export function shopManagementRoutes({db,currentUser,json,readBody,mailProvider,
           const status=d.status==='cancelled'?'cancelled':'scheduled',start=Date.parse(d.startsAt||old.starts_at),end=Date.parse(d.endsAt||old.ends_at),title=text(d.title||old.title,150);if(!title||!Number.isFinite(start)||!Number.isFinite(end)||end<=start||end-start>86400000)fail(400,'Valid start, end and title required');
           const sync=old.google_event_id?(status==='cancelled'?'cancel_pending':'update_pending'):'local_only';
           db.prepare('UPDATE shop_appointments SET starts_at=?,ends_at=?,title=?,status=?,management_revision=management_revision+1,sync_status=?,sync_error=? WHERE id=?').run(new Date(start).toISOString(),new Date(end).toISOString(),title,status,sync,old.google_event_id?'Remote calendar update requires successful provider adapter':'',id);
-          const after=db.prepare('SELECT * FROM shop_appointments WHERE id=?').get(id);db.prepare('INSERT INTO appointment_change_events(appointment_id,before_json,after_json,reason,actor_id,actor_username) VALUES(?,?,?,?,?,?)').run(id,JSON.stringify(old),JSON.stringify(after),reason,user.id,user.username);audit(db,user,'Appointment changed',{id,status,reason});return {appointment:after,calendarSync:sync};
+          const after=db.prepare('SELECT * FROM shop_appointments WHERE id=?').get(id);db.prepare('INSERT INTO appointment_change_events(appointment_id,before_json,after_json,reason,actor_id,actor_username) VALUES(?,?,?,?,?,?)').run(id,JSON.stringify(old),JSON.stringify(after),reason,user.id,user.username);audit(db,user,'Appointment changed',{id,status,reason});
+          const customer=after.customer_id?db.prepare('SELECT name FROM customers WHERE id=?').get(after.customer_id):null;
+          // notify is the synchronous durable queue callback, never a network send.
+          const notification=notify?notify('appointment_changed',{customer_id:after.customer_id,customer_name:customer?.name},{appointmentId:after.id,managementRevision:after.management_revision,title:after.title,startsAt:after.starts_at,status:after.status}):{status:'not_queued',notice:'Appointment notification service is not configured'};
+          if(notification?.then)throw Error('Appointment notification callback must queue synchronously');
+          return {appointment:after,calendarSync:sync,notification};
         });
         if(calendarChange&&result.appointment.google_event_id){try{const external=await calendarChange(result.appointment);return respond(200,{...result,calendarSync:external.status||'provider_accepted'});}catch{return respond(200,{...result,calendarSync:'error',notice:'Saved locally; remote calendar update failed and needs retry'});}}
         return respond(200,result);

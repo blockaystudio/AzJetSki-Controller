@@ -1,5 +1,6 @@
 // Shop accounting documents and reconciliation. No operation transfers money.
 import crypto from 'node:crypto';
+import {appendStockMovement} from './inventory-movements.mjs';
 
 const tables = {repair:{payments:'pos_payments',parent:'work_order_id'},retail:{payments:'retail_payments',parent:'retail_order_id'}};
 const text=(value,max=600)=>String(value??'').trim().slice(0,max);
@@ -83,7 +84,7 @@ function invoice(db,scope,id,invoiceId){
     let snapshot;try{snapshot=JSON.parse(row.snapshot_json);}catch{fail(409,'Invoice snapshot is invalid; review before crediting');}
     const total=cents(snapshot.estimateCents,'Snapshot total'),tax=cents(snapshot.taxCents??0,'Snapshot tax');
     if(tax>total)fail(409,'Invoice tax snapshot exceeds its total');
-    return {id:row.id,number:row.number,customerName:row.recipient_name,issuedAt:row.issued_at,total,tax,subtotal:total-tax,voided:row.voided_at,snapshot};
+    return {id:row.id,number:row.number,customerName:row.recipient_name,issuedAt:row.issued_at,total,tax,subtotal:total-tax,voided:row.voided_at,supersededBy:row.superseded_by??null,snapshot};
   }
   const row=db.prepare('SELECT * FROM retail_special_orders WHERE id=?').get(id);
   if(!row?.invoice_issued_at)fail(409,'Issue the retail invoice before crediting it');
@@ -140,10 +141,16 @@ export function cancelInvoice(db,scope,id,user,input){
     const prior=db.prepare("SELECT * FROM accounting_credits WHERE scope=? AND idempotency_key=?").get(scope,key);
     if(prior){const saved=JSON.parse(prior.snapshot_json);if(prior.kind!=='cancellation'||prior.entity_id!==id||saved.reason!==reason||(scope==='repair'&&saved.invoiceId!==Number(input.invoiceId)))fail(409,'Idempotency key was used with different cancellation details');return {...prior,duplicate:true};}
     const source=invoice(db,scope,id,scope==='repair'?Number(input.invoiceId):id),balance=accountBalance(db,scope,id);
+    if(source.supersededBy)fail(409,'Historical invoice has been superseded; cancel the current revised invoice');
     const {payments,parent}=tables[scope];
     if(balance.netPaidCents!==0||balance.pendingCents!==0||db.prepare(`SELECT 1 FROM ${payments} WHERE ${parent}=? AND status='confirmed' LIMIT 1`).get(id))fail(409,'Cancellation requires an unpaid account with no confirmed payment history or pending entries; issue a credit and refund instead');
     if(source.total!==balance.rawTotalCents)fail(409,'Current total differs from the issued invoice; use a reviewed credit note');
-    if(scope==='repair'&&db.prepare('SELECT COUNT(*) n FROM ot_invoices WHERE work_order_id=? AND voided_at IS NULL').get(id).n!==1)fail(409,'Reconcile multiple active invoices before cancellation');
+    if(scope==='repair'){
+      // Prior revisions retain their invoice/credit/stock references. Only the
+      // current document can cancel the account, including on legacy schemas.
+      const active=db.prepare('SELECT * FROM ot_invoices WHERE work_order_id=? AND voided_at IS NULL').all(id).filter(row=>row.superseded_by==null);
+      if(active.length!==1||active[0].id!==source.id)fail(409,'Reconcile multiple active invoices before cancellation');
+    }
     noPurchases(db,scope,id);
     const used=db.prepare('SELECT COALESCE(SUM(subtotal_cents),0) subtotal,COALESCE(SUM(tax_cents),0) tax FROM accounting_credits WHERE scope=? AND entity_id=?').get(scope,id);
     const row=createCreditInside(db,scope,id,user,{...input,reason,invoiceId:source.id,subtotalCents:source.subtotal-used.subtotal,taxCents:source.tax-used.tax},'cancellation');
@@ -165,6 +172,7 @@ export function receiveCustomerReturn(db,scope,id,user,input){
   return transaction(db,()=>{
     const prior=db.prepare('SELECT * FROM accounting_returns WHERE idempotency_key=?').get(key);
     if(prior){if(prior.request_fingerprint!==fingerprint)fail(409,'Idempotency key was used with different return details');return {...prior,duplicate:true};}
+    if(db.prepare('SELECT 1 FROM inventory_adjustments WHERE idempotency_key=?').get(key))fail(409,'Stock key already belongs to another recorded operation');
     const credit=db.prepare('SELECT * FROM accounting_credits WHERE id=? AND scope=? AND entity_id=?').get(creditId,scope,id);
     if(!credit)fail(409,'Select a credit note on this account');
     const sale=db.prepare("SELECT * FROM inventory_adjustments WHERE id=? AND reason='sold' AND quantity_delta<0 AND reference_type='invoice'").get(saleId);
@@ -174,7 +182,7 @@ export function receiveCustomerReturn(db,scope,id,user,input){
     // Reserve the retained return ID under the same write transaction so its stock
     // movement can be captured in the immutable row without a later history edit.
     const returnId=db.prepare('SELECT COALESCE(MAX(id),0)+1 id FROM accounting_returns').get().id;
-    const stockId=disposition==='resellable'?Number(db.prepare("INSERT INTO inventory_adjustments(item_sku,quantity_delta,reason,reference_type,reference_id,actor_id) VALUES(?,?,'return','customer_return',?,?)").run(sale.item_sku,quantity,String(returnId),user.id).lastInsertRowid):null;
+    const stockId=disposition==='resellable'?appendStockMovement(db,user,{sku:sale.item_sku,quantityDelta:quantity,reason:'return',referenceType:'customer_return',referenceId:String(returnId),idempotencyKey:key,source:'customer_return',details:normalized}).id:null;
     db.prepare(`INSERT INTO accounting_returns(id,scope,entity_id,credit_id,sale_adjustment_id,sku,quantity,disposition,inventory_adjustment_id,reason,actor_id,actor_username,actor_role,idempotency_key,request_fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(returnId,scope,id,credit.id,sale.id,sale.item_sku,quantity,disposition,stockId,reason,user.id,user.username,user.role,key,fingerprint);
     audit(db,user,'Customer returned stock received',{returnId,scope,entityId:id,creditId:credit.id,saleId,sku:sale.item_sku,quantity,disposition},scope==='repair'?id:null);
     return db.prepare('SELECT * FROM accounting_returns WHERE id=?').get(returnId);

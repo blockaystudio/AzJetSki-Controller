@@ -1,5 +1,7 @@
 # Single-shop review release — 11.1.0-preview.1
 
+Current release: [11.1.0-preview.2 corrections and UI update](CORRECTIONS_2026-10-26.md). This page preserves the original feature inventory and deployment guidance.
+
 **Follow-up assessment, October 26:** [Current findings and UI development plan](PROJECT_ASSESSMENT_2026-10-26.md) records defects discovered beyond the existing passing tests. The feature inventory below describes implemented code, not complete acceptance of every workflow.
 
 This release is for AZ Jet Ski, Boats & Powersports. It does not add other shops, public registration, subscriptions, or multi-tenant billing.

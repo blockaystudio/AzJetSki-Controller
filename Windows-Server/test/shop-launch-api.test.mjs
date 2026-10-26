@@ -120,13 +120,13 @@ test('strict shop launch: authenticated edits, retained Unicode approvals, scope
     const portalHtml=await portal.text();assert.match(portalHtml,/Customer inspection photo/);assert.doesNotMatch(portalHtml,/INTERNAL-PIN|INTERNAL-PHOTO/);
     assert.equal((await fetch(base+portalPath+`/media/${visible}`)).status,200);
     assert.equal((await fetch(base+portalPath+`/media/${privatePhoto}`)).status,404);
-    const invoice=(await json(`/api/pos/work-orders/${created.id}/invoices`,{method:'POST',cookie:owner,body:{sendEmail:false},expected:201})).value;
+    const invoice=(await json(`/api/pos/work-orders/${created.id}/invoices`,{method:'POST',cookie:owner,body:{sendEmail:false,idempotencyKey:crypto.randomUUID(),expectedRevision:(await json(jobPath,{cookie:owner})).value.workOrder.revision},expected:201})).value;
     const invoiceId=(await json(`/api/pos/work-orders/${created.id}/invoices`,{cookie:owner})).value.invoices[0].id;
     assert.ok(invoice.number);
     const otherCustomer=(await json('/api/pos/customers',{method:'POST',cookie:owner,expected:201,body:{name:'Private Other Customer',address_line1:'200 Test Way',city:'Phoenix',state:'AZ',postal_code:'85001'}})).value.customer;
     const otherVehicle=(await json('/api/pos/vehicles',{method:'POST',cookie:owner,expected:201,body:{customer_id:otherCustomer.id,make:'Sea-Doo',model:'WRONG-CUSTOMER-UNIT'}})).value.vehicle;
     const otherOrder=(await json('/api/pos/work-orders',{method:'POST',cookie:owner,expected:201,body:{customer_id:otherCustomer.id,vehicle_id:otherVehicle.id,estimate_total:75,complaint:'PRIVATE-OTHER-ORDER'} })).value;
-    await json(`/api/pos/work-orders/${otherOrder.id}/invoices`,{method:'POST',cookie:owner,body:{sendEmail:false},expected:201});
+    await json(`/api/pos/work-orders/${otherOrder.id}/invoices`,{method:'POST',cookie:owner,body:{sendEmail:false,idempotencyKey:crypto.randomUUID(),expectedRevision:(await json(`/api/work-orders/${otherOrder.id}`,{cookie:owner})).value.workOrder.revision},expected:201});
     const otherInvoiceId=(await json(`/api/pos/work-orders/${otherOrder.id}/invoices`,{cookie:owner})).value.invoices[0].id;
     const otherPhoto=(await json(`/api/work-orders/${otherOrder.id}/media`,{method:'POST',cookie:owner,body:{filename:'other-unit.png',mimeType:'image/png',dataBase64:png,caption:'PRIVATE-OTHER-CUSTOMER-PHOTO',customerVisible:true}})).value.mediaId;
     assert.equal((await fetch(base+portalPath+`/invoices/${invoiceId}`)).status,404,'status-only link cannot expose invoices');

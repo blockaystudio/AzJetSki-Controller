@@ -85,6 +85,38 @@ test('unpaid cancellation creates full credit and voids an invoice, blocking rev
   assert.throws(()=>f.db.prepare("UPDATE retail_special_lines SET status='verified' WHERE retail_order_id=?").run(f.retail),/Cancelled invoice/);
 });
 
+test('cancelling a revised invoice preserves prior documents, credits and original-sale return references',t=>{
+  const f=fixture();t.after(()=>f.db.close());
+  const original=f.db.prepare('SELECT * FROM ot_invoices WHERE id=?').get(f.repairInvoice);
+  const priorCredit=f.credit();
+  const revised=Number(f.db.prepare(`INSERT INTO ot_invoices(work_order_id,number,token_hash,amount_cents,valid_until,recipient_name,snapshot_json,created_by,document_kind,supersedes_invoice_id) VALUES(?,'INV-CURRENT',?,9000,'2099-01-01','Accounting customer',?,?,'revised_invoice',?)`).run(f.repair,crypto.randomUUID(),original.snapshot_json,f.users.owner.id,original.id).lastInsertRowid);
+  f.db.prepare('UPDATE ot_invoices SET superseded_by=? WHERE id=?').run(revised,original.id);
+  const before={invoices:f.db.prepare('SELECT * FROM ot_invoices ORDER BY id').all(),credits:f.db.prepare('SELECT * FROM accounting_credits ORDER BY id').all(),order:f.db.prepare('SELECT * FROM work_orders WHERE id=?').get(f.repair),audit:f.db.prepare('SELECT * FROM audit_log ORDER BY id').all()};
+  assert.throws(()=>cancelInvoice(f.db,'repair',f.repair,f.users.owner,{invoiceId:original.id,reason:'Cancel historical document',idempotencyKey:'cancel-historical-invoice'}),error=>error.status===409&&/superseded/.test(error.message));
+  assert.deepEqual({invoices:f.db.prepare('SELECT * FROM ot_invoices ORDER BY id').all(),credits:f.db.prepare('SELECT * FROM accounting_credits ORDER BY id').all(),order:f.db.prepare('SELECT * FROM work_orders WHERE id=?').get(f.repair),audit:f.db.prepare('SELECT * FROM audit_log ORDER BY id').all()},before);
+  const input={invoiceId:revised,reason:'Customer cancelled remaining work',idempotencyKey:'cancel-current-revision'};
+  const cancelled=cancelInvoice(f.db,'repair',f.repair,f.users.owner,input);
+  assert.equal(cancelled.invoice_id,revised);assert.equal(cancelled.subtotal_cents,8100);assert.equal(cancelled.tax_cents,900);assert.equal(cancelled.total_cents,9000);
+  assert.equal(accountBalance(f.db,'repair',f.repair).effectiveTotalCents,0);
+  assert.equal(cancelInvoice(f.db,'repair',f.repair,f.users.owner,input).duplicate,true);
+  const retained=f.db.prepare('SELECT * FROM ot_invoices WHERE id=?').get(original.id);
+  assert.equal(retained.snapshot_json,original.snapshot_json);assert.equal(retained.voided_at,null);assert.equal(retained.superseded_by,revised);
+  assert.ok(f.db.prepare('SELECT voided_at FROM ot_invoices WHERE id=?').get(revised).voided_at);
+  assert.deepEqual(f.db.prepare('SELECT * FROM accounting_credits WHERE id=?').get(priorCredit.id),priorCredit);
+  const sale=Number(f.db.prepare("INSERT INTO inventory_adjustments(item_sku,quantity_delta,reason,reference_type,reference_id,actor_id) VALUES('ORIGINAL-PART',-1,'sold','invoice',?,?)").run(original.number,f.users.owner.id).lastInsertRowid);
+  const returned=receiveCustomerReturn(f.db,'repair',f.repair,f.users.owner,{saleAdjustmentId:sale,creditNoteId:priorCredit.id,quantity:1,disposition:'resellable',received:true,reason:'Original invoice part received',idempotencyKey:'original-invoice-return'});
+  assert.equal(returned.credit_id,priorCredit.id);assert.equal(returned.sale_adjustment_id,sale);
+});
+
+test('cancellation still rejects unresolved multiple active repair invoices',t=>{
+  const f=fixture();t.after(()=>f.db.close());
+  const original=f.db.prepare('SELECT * FROM ot_invoices WHERE id=?').get(f.repairInvoice);
+  f.db.prepare(`INSERT INTO ot_invoices(work_order_id,number,token_hash,amount_cents,valid_until,recipient_name,snapshot_json,created_by) VALUES(?,'INV-UNRECONCILED',?,10000,'2099-01-01','Accounting customer',?,?)`).run(f.repair,crypto.randomUUID(),original.snapshot_json,f.users.owner.id);
+  assert.throws(()=>cancelInvoice(f.db,'repair',f.repair,f.users.owner,{invoiceId:original.id,reason:'Attempt ambiguous cancellation',idempotencyKey:'cancel-ambiguous-invoice'}),error=>error.status===409&&/multiple active/.test(error.message));
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM accounting_credits').get().n,0);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM ot_invoices WHERE voided_at IS NOT NULL').get().n,0);
+});
+
 test('cancellation refuses paid/pending accounts and supplier progress before any credit is written',t=>{
   const f=fixture();t.after(()=>f.db.close());
   f.payment('repair',{method:'zelle',status:'pending',amount:1000});
@@ -190,7 +222,7 @@ test('a later invoice preserves credits at issue separately from raw lines and p
   f.credit('repair',{subtotalCents:900,taxCents:100});
   const props={db:f.db,currentUser:()=>f.users.owner,readBody:async req=>req.body,json:(res,status,body)=>Object.assign(res,{status,body}),publicBaseUrl:'https://shop.example.test'};
   const checkout=checkoutRoutes(props),res={},path=`/api/pos/work-orders/${f.repair}/invoices`;
-  await checkout({method:'POST',body:{}},res,path,new URL(path,'https://shop.example.test'));
+  await checkout({method:'POST',body:{idempotencyKey:crypto.randomUUID(),expectedRevision:f.db.prepare('SELECT revision FROM work_orders WHERE id=?').get(f.repair).revision,documentKind:'revised_invoice',supersedesInvoiceId:f.repairInvoice}},res,path,new URL(path,'https://shop.example.test'));
   assert.equal(res.status,201);
   const snapshot=JSON.parse(f.db.prepare('SELECT snapshot_json FROM ot_invoices WHERE id=?').get(res.body.id).snapshot_json);
   assert.equal(snapshot.estimateCents,10000);assert.equal(snapshot.creditCents,1000);assert.equal(snapshot.effectiveCents,9000);assert.equal(snapshot.balanceCents,9000);

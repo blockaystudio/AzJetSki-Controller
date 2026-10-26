@@ -34,7 +34,7 @@ export function captureRetailReceiptSnapshot(db, id) {
     taxCents: order.tax_cents,
     totalCents: order.total_cents,
     taxRateBps: order.tax_bps,
-    items: db.prepare(`SELECT description, requested_sku, quantity, unit_price_cents, taxable
+    items: db.prepare(`SELECT id, description, requested_sku, vendor_sku, quantity, unit_price_cents, taxable
       FROM retail_special_lines WHERE retail_order_id=? ORDER BY id`).all(id)
   };
   db.prepare("UPDATE retail_special_orders SET receipt_snapshot_json=? WHERE id=? AND receipt_snapshot_json=''")

@@ -20,6 +20,8 @@ import {createMaintenance} from './maintenance.mjs';
 import {shopReportsRoutes} from './shop-reports.mjs';
 import {syncAppointmentChange,calendarChangeRoutes} from './google-calendar.mjs';
 import {createNotificationService,notificationRoutes} from './service-notifications.mjs';
+import {assertJobIdentityChange,assertJobStageChange,jobIdentityFields} from './job-policy.mjs';
+import {assertManualRepairAccount,repairFinancialFields} from './tax.mjs';
 
 loadEnv();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -44,6 +46,9 @@ const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || `http://localhost:${PORT
 const LIVE_VENDOR_ORDERING = false; // V6: supplier orders require vetted connector + explicit desktop confirmation
 const AUTO_BUILD_PROCUREMENT = String(process.env.AUTO_BUILD_PROCUREMENT || 'true').toLowerCase() !== 'false';
 const AUTO_SUPPLIER_LOOKUP = String(process.env.AUTO_SUPPLIER_LOOKUP || 'false').toLowerCase() === 'true';
+// Migration must be explicitly enabled. Imported records are insert-only; the
+// legacy reconciler must never overwrite local account, identity or history.
+const QBPOS_IMPORT_ENABLED = process.env.QBPOS_IMPORT_MODE === 'insert-only';
 const STAGES = ['Intake','Diagnosing','Awaiting Approval','Parts Ordered','In Progress','Quality Check','Ready','Picked Up','Closed','Declined'];
 const ROLES = ['owner','manager','service_writer','advisor','technician','parts','viewer'];
 const PERMISSIONS = {
@@ -71,7 +76,10 @@ const readBody = async (req, max = 20_000_000) => {
   for await (const c of req) { size += c.length; if (size > max) throw new Error('Body too large'); chunks.push(c); }
   const raw=Buffer.concat(chunks).toString('utf8');
   const parsed=raw ? JSON.parse(raw) : {};
-  if(currentUser(req))requireEditRevision(db,req,new URL(req.url,'http://local').pathname,parsed);
+  const pathname=new URL(req.url,'http://local').pathname;
+  // Invoice creation validates after its idempotency lookup, so an exact retry
+  // can return the retained document even if the job revision advanced.
+  if(currentUser(req)&&!(req.method==='POST'&&/^\/api\/pos\/work-orders\/\d+\/(invoice|invoices|docusign\/send)$/.test(pathname)))requireEditRevision(db,req,pathname,parsed);
   return parsed;
 };
 function currentUser(req) { return accessSecurity.sessionUser(req); }
@@ -90,7 +98,7 @@ const accessSecurity=createAccessSecurity({db,json,readBody,publicBaseUrl:PUBLIC
 const authorizationsRouter=authorizationRoutes({db,currentUser,json,readBody,publicBaseUrl:PUBLIC_BASE_URL,shopName:SHOP_NAME,uploadDir,notify:(event,wo,extra)=>notifications.queueEvent(event,wo,extra)});
 const customerAccess=createCustomerAccess({db,currentUser,json,readBody,publicBaseUrl:PUBLIC_BASE_URL,shopName:SHOP_NAME,shopPhone:SHOP_PHONE,uploadDir,authorizationDocument:(id,wo)=>readRetainedAuthorizationDocument(db,id,wo,uploadDir)});
 const accountingRouter=accountingRoutes({db,currentUser,json,readBody});
-const managementRouter=shopManagementRoutes({db,currentUser,json,readBody,calendarChange:appointment=>syncAppointmentChange(db,appointment)});
+const managementRouter=shopManagementRoutes({db,currentUser,json,readBody,calendarChange:appointment=>syncAppointmentChange(db,appointment),notify:(event,wo,extra)=>notifications.queueEvent(event,wo,extra)});
 const notifications=createNotificationService({db,shopName:SHOP_NAME});
 const notificationsRouter=notificationRoutes({service:notifications,currentUser,json,readBody});
 const calendarChangesRouter=calendarChangeRoutes({db,currentUser,json,readBody});
@@ -148,7 +156,7 @@ function workOrderView(id) {
   return wo;
 }
 function normalizeIncoming(x) {
-  const n=v => Number.isFinite(Number(v)) ? Number(v) : 0;
+  const n=v => {const value=Number(v??0);if(!Number.isFinite(value))throw new Error('Imported amounts must be finite');return value;};
   const lines=Array.isArray(x.lines)?x.lines:[];
   const inferredParts=lines.filter(isPartLine).reduce((s,l)=>s+n(l.amount),0);
   const inferredLabor=lines.filter(l=>String(l.lineType||l.line_type||'').toLowerCase().includes('labor')).reduce((s,l)=>s+n(l.amount),0);
@@ -161,28 +169,35 @@ function normalizeIncoming(x) {
   };
 }
 function upsertImported(x, actor='qbpos-bridge') {
+  if(!QBPOS_IMPORT_ENABLED)throw new Error('QuickBooks import is disabled');
   const v=normalizeIncoming(x); if(!v.external_id) throw new Error('externalId/TxnID is required');
   const old=db.prepare('SELECT * FROM work_orders WHERE source=? AND external_id=?').get('qbpos',v.external_id); let id;
   if(old){
-    db.prepare(`UPDATE work_orders SET ref_number=?,customer_external_id=?,customer_name=?,phone=?,email=?,unit_label=?,year=?,make=?,model=?,serial=?,complaint=?,authorized_work=CASE WHEN authorized_work='' OR authorized_work IS NULL THEN ? ELSE authorized_work END,qb_status=?,estimate_total=?,parts_total=?,labor_total=?,paid_total=?,balance=?,tech=?,date_opened=?,date_closed=?,time_modified=?,raw_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-      .run(v.ref_number,v.customer_external_id,v.customer_name,v.phone,v.email,v.unit_label,v.year,v.make,v.model,v.serial,v.complaint,v.authorized_work,v.qb_status,v.estimate_total,v.parts_total,v.labor_total,v.paid_total,v.balance,v.tech,v.date_opened,v.date_closed,v.time_modified,v.raw_json,old.id); id=old.id;
-  } else {
+    if(old.raw_json===v.raw_json)return {id:old.id,created:false,duplicate:true};
+    throw new Error('QuickBooks migration is insert-only; existing work orders require reviewed reconciliation');
+  }
+  for(const value of [v.estimate_total,v.parts_total,v.labor_total,v.paid_total,v.balance])if(!Number.isFinite(value)||value<0)throw new Error('Imported amounts must be finite and nonnegative');
+  if(Math.round(v.paid_total*100)>Math.round(v.estimate_total*100))throw new Error('Imported payments exceed the estimate; reconcile before migration');
+  const expectedBalance=Math.round(v.estimate_total*100)-Math.round(v.paid_total*100);
+  if(x.balance!==undefined&&Math.round(v.balance*100)!==expectedBalance)throw new Error('Imported balance does not reconcile with estimate less payments');
+  v.balance=expectedBalance/100;
+  for(const line of v.lines)for(const field of ['qty','rate','amount','cost'])if(line[field]!==undefined&&!Number.isFinite(Number(line[field])))throw new Error('Imported line values must be finite');
+  {
     const r=db.prepare(`INSERT INTO work_orders(source,external_id,ref_number,customer_external_id,customer_name,phone,email,unit_label,year,make,model,serial,complaint,authorized_work,qb_status,stage,estimate_total,parts_total,labor_total,paid_total,balance,tech,date_opened,date_closed,time_modified,raw_json,next_action) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(v.source,v.external_id,v.ref_number,v.customer_external_id,v.customer_name,v.phone,v.email,v.unit_label,v.year,v.make,v.model,v.serial,v.complaint,v.authorized_work,v.qb_status,'Intake',v.estimate_total,v.parts_total,v.labor_total,v.paid_total,v.balance,v.tech,v.date_opened,v.date_closed,v.time_modified,v.raw_json,'Review intake and assign technician'); id=Number(r.lastInsertRowid);
   }
-  db.prepare('DELETE FROM work_order_lines WHERE work_order_id=?').run(id);
   const ins=db.prepare('INSERT INTO work_order_lines(work_order_id,line_type,item_ref,description,qty,rate,amount,cost) VALUES(?,?,?,?,?,?,?,?)');
   for(const l of v.lines) ins.run(id,String(l.lineType||l.line_type||''),String(l.itemRef||l.item_ref||''),String(l.description||''),Number(l.qty||0),Number(l.rate||0),Number(l.amount||0),Number(l.cost||0));
   syncPartRequirements(id,v.lines);
-  audit(id,actor,old?'QuickBooks work order updated':'QuickBooks work order imported',{externalId:v.external_id,refNumber:v.ref_number});
-  return {id,created:!old};
+  audit(id,actor,'QuickBooks work order imported',{externalId:v.external_id,refNumber:v.ref_number});
+  return {id,created:true};
 }
 
 async function notify(event,wo,extra={}){return notifications.queueEvent(event,wo,extra);}
 
 function createPortalLink(workOrderId,days=30){return customerAccess.createLink(workOrderId,{days});}
 
-function portalRecord(token) { return db.prepare(`SELECT p.*,w.* FROM customer_portal_tokens p JOIN work_orders w ON w.id=p.work_order_id WHERE p.token_hash=? AND p.active=1 AND (p.expires_at IS NULL OR p.expires_at>datetime('now'))`).get(publicHash(token)); }
+function portalRecord(token) { const record=customerAccess.record(token);return record?{...record.link,...record.job,work_order_id:record.job.id}:null; }
 function saveImage({workOrderId,updateId=null,approvalId=null,scope='progress',filename,mimeType,dataBase64,caption='',customerVisible=true,userId}) {
   const allowed=new Set(['image/jpeg','image/png','image/webp']); if(!allowed.has(mimeType)) throw new Error('Only JPEG, PNG, and WebP images are accepted');
   const buf=Buffer.from(String(dataBase64||'').replace(/^data:[^;]+;base64,/,''),'base64'); if(!buf.length) throw new Error('Image data is empty'); if(buf.length>8_000_000) throw new Error('Image exceeds 8 MB');
@@ -314,9 +329,14 @@ const server=http.createServer(async(req,res)=>{
     if(p==='/api/me'&&req.method==='GET'){const u=currentUser(req);return json(res,200,{reviewMode:process.env.OWNERTRACKER_REVIEW==='true',user:u?userView(u):null,shop:{name:SHOP_NAME,phone:SHOP_PHONE},stages:STAGES,roles:ROLES,permissions:u?[...PERMISSIONS[u.role]||[]]:[]});}
 
     if(p==='/api/integrations/qbpos/work-orders/bulk'&&req.method==='POST'){
-      if(!requireBridge(req,res))return;const b=await readBody(req,20_000_000),items=Array.isArray(b)?b:(b.workOrders||[]);let created=0,updated=0,errors=[],changedIds=[];db.exec('BEGIN');try{for(const item of items){try{const r=upsertImported(item);changedIds.push(r.id);r.created?created++:updated++;}catch(e){errors.push({externalId:item.externalId||item.txnId||'',error:String(e.message||e)});}}db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
+      if(!requireBridge(req,res))return;
+      if(!QBPOS_IMPORT_ENABLED)return json(res,409,{error:'QuickBooks import is disabled. Reviewed migrations may explicitly set QBPOS_IMPORT_MODE=insert-only; existing jobs are never overwritten.'});
+      const b=await readBody(req,20_000_000),items=Array.isArray(b)?b:(b.workOrders||[]);
+      if(!Array.isArray(items))return json(res,400,{error:'workOrders must be an array'});
+      let created=0,updated=0,duplicates=0,errors=[],changedIds=[];
+      db.exec('BEGIN IMMEDIATE');try{for(const item of items){db.exec('SAVEPOINT qbpos_item');try{const r=upsertImported(item);if(r.duplicate)duplicates++;else{changedIds.push(r.id);created++;}db.exec('RELEASE qbpos_item');}catch(e){db.exec('ROLLBACK TO qbpos_item; RELEASE qbpos_item');errors.push({externalId:item?.externalId||item?.txnId||'',error:String(e.message||e)});}}db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
       const procurement=[]; if(AUTO_BUILD_PROCUREMENT){for(const id of [...new Set(changedIds)]){try{if(AUTO_SUPPLIER_LOOKUP)await lookupSuppliersForWorkOrder(id);const built=buildProcurementCarts(id,null);const autoOrders=await autoSubmitReady(built.carts);procurement.push({workOrderId:id,...built,autoOrders});}catch(e){procurement.push({workOrderId:id,error:String(e.message||e)});}}}
-      db.prepare('INSERT INTO sync_runs(source,status,imported_count,updated_count,detail) VALUES(?,?,?,?,?)').run('qbpos',errors.length?'partial':'ok',created,updated,JSON.stringify({errors,procurement}).slice(0,5000));return json(res,200,{ok:true,created,updated,errors,procurement});
+      db.prepare('INSERT INTO sync_runs(source,status,imported_count,updated_count,detail) VALUES(?,?,?,?,?)').run('qbpos',errors.length?'partial':'ok',created,updated,JSON.stringify({errors,procurement,duplicates}).slice(0,5000));return json(res,200,{ok:true,created,updated,duplicates,errors,procurement});
     }
     if(p==='/api/integrations/qbpos/sync-log'&&req.method==='POST'){if(!requireBridge(req,res))return;const b=await readBody(req);db.prepare('INSERT INTO sync_runs(source,status,imported_count,updated_count,detail) VALUES(?,?,?,?,?)').run('qbpos',String(b.status||'info'),Number(b.imported||0),Number(b.updated||0),String(b.detail||''));return json(res,200,{ok:true});}
 
@@ -334,13 +354,13 @@ const server=http.createServer(async(req,res)=>{
     const wm=p.match(/^\/api\/work-orders\/(\d+)$/);
     if(wm&&req.method==='GET'){const u=requirePermission(req,res,'read');if(!u)return;if(!canAccessJob(u,Number(wm[1])))return json(res,403,{error:'Not assigned to this work order'});const wo=workOrderView(Number(wm[1]));return wo?json(res,200,{workOrder:wo}):json(res,404,{error:'Not found'});}
     if(wm&&req.method==='PATCH'){
-      const u=requirePermission(req,res,'edit_job');if(!u)return;if(!canAccessJob(u,Number(wm[1])))return json(res,403,{error:'Not assigned to this work order'});const id=Number(wm[1]),b=await readBody(req);requireEditRevision(db,req,p,b);const allowed=(u.role==='technician'?['stage','next_action','next_action_due']:['stage','authorized_work','tech','unit_label','year','make','model','serial','complaint','assigned_user_id','priority','promised_date','next_action','next_action_due']),sets=[],params=[];for(const k of allowed)if(Object.hasOwn(b,k)){if(k==='stage'&&!STAGES.includes(b[k]))return json(res,400,{error:'Invalid stage'});if(k==='assigned_user_id'&&!can(u,'assign_job'))return json(res,403,{error:'Only service writers/managers can reassign jobs'});if(k==='assigned_user_id'){sets.push(`${k}=?`);params.push(b[k]?Number(b[k]):null);}else{sets.push(`${k}=?`);params.push(String(b[k]??''));}}if(!sets.length)return json(res,400,{error:'No editable fields'});sets.push('updated_at=CURRENT_TIMESTAMP');params.push(id);db.prepare(`UPDATE work_orders SET ${sets.join(',')} WHERE id=?`).run(...params);audit(id,u.username,'Work order updated',b);return json(res,200,{ok:true,workOrder:workOrderView(id)});
+      const u=requirePermission(req,res,'edit_job');if(!u)return;if(!canAccessJob(u,Number(wm[1])))return json(res,403,{error:'Not assigned to this work order'});const id=Number(wm[1]),b=await readBody(req);requireEditRevision(db,req,p,b);const before=workOrderView(id);if(repairFinancialFields.some(key=>Object.hasOwn(b,key))){assertManualRepairAccount(db,id);return json(res,400,{error:'Financial changes must use the POS sale-line and payment routes'});}assertJobStageChange(before,b.stage);const identityChanged=assertJobIdentityChange(db,before,b);const allowed=(u.role==='technician'?['stage','next_action','next_action_due']:['stage','authorized_work','tech','unit_label','year','make','model','serial','complaint','assigned_user_id','priority','promised_date','next_action','next_action_due']),sets=[],params=[];for(const k of allowed)if(Object.hasOwn(b,k)){if(k==='stage'&&!STAGES.includes(b[k]))return json(res,400,{error:'Invalid stage'});if(k==='assigned_user_id'&&!can(u,'assign_job'))return json(res,403,{error:'Only service writers/managers can reassign jobs'});if(k==='assigned_user_id'){sets.push(`${k}=?`);params.push(b[k]?Number(b[k]):null);}else{sets.push(`${k}=?`);params.push(String(b[k]??''));}}if(!sets.length)return json(res,400,{error:'No editable fields'});sets.push('updated_at=CURRENT_TIMESTAMP');params.push(id);db.exec('BEGIN IMMEDIATE');try{db.prepare(`UPDATE work_orders SET ${sets.join(',')} WHERE id=?`).run(...params);audit(id,u.username,'Work order updated',b);if(identityChanged)audit(id,u.username,'Job identity corrected',{before:Object.fromEntries(jobIdentityFields.map(key=>[key,before[key]??null])),after:Object.fromEntries(jobIdentityFields.map(key=>[key,workOrderView(id)[key]??null]))});db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}return json(res,200,{ok:true,workOrder:workOrderView(id)});
     }
     const noteM=p.match(/^\/api\/work-orders\/(\d+)\/notes$/);
     if(noteM&&req.method==='POST'){const u=requirePermission(req,res,'notes');if(!u)return;if(!canAccessJob(u,Number(noteM[1])))return json(res,403,{error:'Not assigned to this work order'});const id=Number(noteM[1]),b=await readBody(req),body=String(b.body||'').trim();if(!body)return json(res,400,{error:'Note required'});db.prepare('INSERT INTO notes(work_order_id,body,author) VALUES(?,?,?)').run(id,body,u.display_name||u.username);audit(id,u.username,'Internal note added');return json(res,200,{ok:true});}
     const updateM=p.match(/^\/api\/work-orders\/(\d+)\/updates$/);
     if(updateM&&req.method==='POST'){
-      const u=requirePermission(req,res,'updates');if(!u)return;if(!canAccessJob(u,Number(updateM[1])))return json(res,403,{error:'Not assigned to this work order'});const id=Number(updateM[1]),wo=workOrderView(id);if(!wo)return json(res,404,{error:'Not found'});const b=await readBody(req);requireEditRevision(db,req,p,b);const title=String(b.title||'').trim(),body=String(b.body||'').trim(),visible=b.customerVisible!==false,notifyCustomer=!!b.notifyCustomer; if(!title&&!body)return json(res,400,{error:'Update title or body required'});
+      const u=requirePermission(req,res,'updates');if(!u)return;if(!canAccessJob(u,Number(updateM[1])))return json(res,403,{error:'Not assigned to this work order'});const id=Number(updateM[1]),b=await readBody(req);requireEditRevision(db,req,p,b);const wo=workOrderView(id);if(!wo)return json(res,404,{error:'Not found'});if(b.stage&&!STAGES.includes(b.stage))return json(res,400,{error:'Invalid stage'});assertJobStageChange(wo,b.stage);const title=String(b.title||'').trim(),body=String(b.body||'').trim(),visible=b.customerVisible!==false,notifyCustomer=!!b.notifyCustomer; if(!title&&!body)return json(res,400,{error:'Update title or body required'});
       const r=db.prepare(`INSERT INTO work_order_updates(work_order_id,author_user_id,author_name,title,body,stage,customer_visible,notify_customer) VALUES(?,?,?,?,?,?,?,?)`).run(id,u.id,u.display_name||u.username,title,body,String(b.stage||wo.stage),visible?1:0,notifyCustomer?1:0); const updateId=Number(r.lastInsertRowid); const mediaIds=Array.isArray(b.mediaIds)?b.mediaIds.map(Number).filter(Boolean):[]; if(mediaIds.length){const marks=mediaIds.map(()=>'?').join(',');db.prepare(`UPDATE media SET update_id=? WHERE work_order_id=? AND id IN (${marks})`).run(updateId,id,...mediaIds);}
       if(b.stage&&STAGES.includes(b.stage))db.prepare('UPDATE work_orders SET stage=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(b.stage,id);let portalUrl=null,notification=null;if(visible&&notifyCustomer){portalUrl=createPortalLink(id);notification=await notify('customer_progress_update',workOrderView(id),{portalUrl,title,body,stage:b.stage||wo.stage});}audit(id,u.username,'Customer progress update posted',{title,visible,notifyCustomer,mediaIds});return json(res,200,{ok:true,updateId,portalUrl,notification});
     }
@@ -353,7 +373,7 @@ const server=http.createServer(async(req,res)=>{
       const u=requirePermission(req,res,'approval');if(!u)return;const id=Number(approvalM[1]),wo=workOrderView(id);if(!wo)return json(res,404,{error:'Not found'});const b=await readBody(req),desc=String(b.authorizedDescription||wo.authorized_work||wo.complaint||'').trim();if(!desc)return json(res,400,{error:'Authorized work description is required'});const token=crypto.randomBytes(32).toString('base64url');const r=db.prepare('INSERT INTO approvals(work_order_id,token_hash,status,authorized_description) VALUES(?,?,?,?)').run(id,publicHash(token),'sent',desc);const approvalId=Number(r.lastInsertRowid);const mediaIds=Array.isArray(b.mediaIds)?b.mediaIds.map(Number).filter(Boolean):[];if(mediaIds.length){const marks=mediaIds.map(()=>'?').join(',');db.prepare(`UPDATE media SET approval_id=?,scope='approval',customer_visible=1 WHERE work_order_id=? AND id IN (${marks})`).run(approvalId,id,...mediaIds);}let ds={mode:'internal'};try{ds=await docusignEnvelope(wo,token);if(ds.envelopeId)db.prepare('UPDATE approvals SET external_envelope_id=? WHERE id=?').run(ds.envelopeId,approvalId);}catch(e){return json(res,502,{error:String(e.message||e)});}db.prepare("UPDATE work_orders SET stage='Awaiting Approval',authorized_work=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(desc,id);const approvalUrl=`${PUBLIC_BASE_URL}/approval/${token}`;await notify('approval_requested',workOrderView(id),{approvalUrl,authorizedDescription:desc,docusign:ds});audit(id,u.username,'Approval requested',{approvalUrl,docusign:ds,mediaIds});return json(res,200,{ok:true,approvalUrl,approvalId,docusign:ds});
     }
     const readyM=p.match(/^\/api\/work-orders\/(\d+)\/ready$/);
-    if(readyM&&req.method==='POST'){const u=requirePermission(req,res,'ready');if(!u)return;const readyInput=await readBody(req);requireEditRevision(db,req,p,readyInput);const id=Number(readyM[1]),wo=workOrderView(id);if(!wo)return json(res,404,{error:'Not found'});db.prepare("UPDATE work_orders SET stage='Ready',next_action='Customer pickup',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id);const portalUrl=createPortalLink(id);const notification=await notify('ready_for_pickup',workOrderView(id),{shop:{name:SHOP_NAME,phone:SHOP_PHONE},portalUrl});audit(id,u.username,'Marked ready and pickup notification triggered',notification);return json(res,200,{ok:true,notification,portalUrl});}
+    if(readyM&&req.method==='POST'){const u=requirePermission(req,res,'ready');if(!u)return;const readyInput=await readBody(req);requireEditRevision(db,req,p,readyInput);const id=Number(readyM[1]),wo=workOrderView(id);if(!wo)return json(res,404,{error:'Not found'});assertJobStageChange(wo,'Ready');db.prepare("UPDATE work_orders SET stage='Ready',next_action='Customer pickup',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id);const portalUrl=createPortalLink(id);const notification=await notify('ready_for_pickup',workOrderView(id),{shop:{name:SHOP_NAME,phone:SHOP_PHONE},portalUrl});audit(id,u.username,'Marked ready and pickup notification triggered',notification);return json(res,200,{ok:true,notification,portalUrl});}
 
     if(p==='/api/staff'&&req.method==='GET'){const u=requirePermission(req,res,'read');if(!u)return;const rows=db.prepare("SELECT id,username,display_name,role,active,last_login_at,created_at FROM users WHERE active=1 AND role!='viewer' ORDER BY display_name,username").all();return json(res,200,{users:rows.map(userView)});}
     if(p==='/api/users'&&req.method==='GET'){const u=requirePermission(req,res,'users');if(!u)return;const rows=db.prepare('SELECT id,username,display_name,role,active,last_login_at,created_at FROM users ORDER BY active DESC,display_name,username').all();return json(res,200,{users:rows.map(userView)});}

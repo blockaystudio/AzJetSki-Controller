@@ -13,8 +13,9 @@ function targetFor(method, pathname, body={}) {
     [/^\/api\/shop\/retail-orders\/(\d+)$/,'retail_special_orders'],[/^\/api\/shop\/retail-orders\/\d+\/lines\/(\d+)$/,'retail_special_lines']
   ])if((match=path.match(pattern)))return {table,id:Number(match[1])};
   if(verb==='POST'){
+    if((match=path.match(/^\/api\/pos\/work-orders\/(\d+)\/(invoice|invoices|docusign\/send)$/)))return {table:'work_orders',id:Number(match[1])};
     if((match=path.match(/^\/api\/pos\/work-orders\/(\d+)\/lines$/)))return {table:'work_orders',id:Number(match[1])};
-    if((match=path.match(/^\/api\/work-orders\/(\d+)\/(ready|request-approval)$/)))return {table:'work_orders',id:Number(match[1])};
+    if((match=path.match(/^\/api\/work-orders\/(\d+)\/(ready|request-approval|authorizations)$/)))return {table:'work_orders',id:Number(match[1])};
     if((match=path.match(/^\/api\/work-orders\/(\d+)\/updates$/))&&Object.hasOwn(body,'stage'))return {table:'work_orders',id:Number(match[1])};
     if((match=path.match(/^\/api\/shop\/retail-orders\/(\d+)\/(lines|issue-invoice)$/)))return {table:'retail_special_orders',id:Number(match[1])};
     if((match=path.match(/^\/api\/shop\/retail-orders\/\d+\/lines\/(\d+)\/(verify|status)$/)))return {table:'retail_special_lines',id:Number(match[1])};

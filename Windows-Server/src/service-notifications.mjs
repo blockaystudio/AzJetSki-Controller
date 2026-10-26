@@ -29,7 +29,11 @@ export function installServiceNotifications(db) {
       OR OLD.identity_fingerprint IS NOT NEW.identity_fingerprint OR OLD.created_at IS NOT NEW.created_at
     BEGIN SELECT RAISE(ABORT,'Service event identity is immutable'); END;
   CREATE TRIGGER IF NOT EXISTS service_event_no_delete BEFORE DELETE ON service_notification_events
-    BEGIN SELECT RAISE(ABORT,'Service event history cannot be deleted'); END;`);
+    BEGIN SELECT RAISE(ABORT,'Service event history cannot be deleted'); END;
+  UPDATE customer_message_outbox SET status='cancelled',next_attempt_at=NULL,
+    last_error='Legacy reminder has no appointment revision; prepare a current reminder'
+    WHERE appointment_id IS NULL AND status IN ('draft','queued','waiting_provider','retry_wait','consent_required','provider_failed','needs_review')
+      AND id IN (SELECT outbox_id FROM service_notification_events WHERE event_name='appointment_reminder');`);
 }
 
 export function createNotificationService({db,shopName=process.env.SHOP_NAME || 'Owner Tracker',actor=systemActor,
@@ -46,7 +50,9 @@ export function createNotificationService({db,shopName=process.env.SHOP_NAME || 
     const link=text(extra.approvalUrl || extra.portalUrl || extra.invoiceUrl || extra.link,2000);
     const subject=`${shopName}: ${templates[event].subject}${wo.ref_number?` — ${text(wo.ref_number,100)}`:''}`;
     const message=[wo.customer_name?`Hello ${text(wo.customer_name,150)},`:'Hello,',templates[event].message(wo,extra),`Thank you,\n${shopName}`].join('\n\n');
-    const source={event,workOrderId,customerId,identity,subject,message,link,draft:extra.draft===true,sendAfter:extra.sendAfter || null};
+    const reminder=event==='appointment_reminder'?{appointmentId:extra.appointmentId,appointmentRevision:extra.managementRevision}:{};
+    if(event==='appointment_reminder'&&(!Number.isSafeInteger(reminder.appointmentId)||!Number.isSafeInteger(reminder.appointmentRevision)))return {status:'needs_review',notice:'Reminder appointment ID and revision are required'};
+    const source={event,workOrderId,customerId,identity,subject,message,link,draft:extra.draft===true,sendAfter:extra.sendAfter || null,...reminder};
     const eventKey='service:'+digest({event,workOrderId,customerId,identity}),fingerprint=digest(source);
     const old=db.prepare('SELECT * FROM service_notification_events WHERE event_key=?').get(eventKey);
     if(old&&old.identity_fingerprint!==fingerprint)return {status:'event_conflict',notice:'Service event identity was reused with changed details; review before sending'};
@@ -54,7 +60,7 @@ export function createNotificationService({db,shopName=process.env.SHOP_NAME || 
     const eventId=old?.id || Number(db.prepare('INSERT INTO service_notification_events(event_key,event_name,work_order_id,customer_id,identity_fingerprint) VALUES(?,?,?,?,?)').run(eventKey,event,workOrderId,customerId,fingerprint).lastInsertRowid);
     try {
       if(!customerId)throw Error('Customer must be linked before automatic notifications can be queued');
-      const result=enqueueCustomerMessage(db,actor,{customerId,category:'service',subject,message,link,idempotencyKey:eventKey,...(extra.draft===true?{draft:true}:{}),...(extra.sendAfter?{sendAfter:extra.sendAfter}:{})});
+      const result=enqueueCustomerMessage(db,actor,{customerId,category:'service',subject,message,link,idempotencyKey:eventKey,...reminder,...(extra.draft===true?{draft:true}:{}),...(extra.sendAfter?{sendAfter:extra.sendAfter}:{})});
       db.prepare('UPDATE service_notification_events SET outbox_id=?,queue_status=?,last_error=? WHERE id=?').run(result.id,result.status,'',eventId);
       db.prepare('INSERT INTO notifications(work_order_id,event,destination,status,detail) VALUES(?,?,?,?,?)').run(workOrderId,event,result.recipient,result.status,JSON.stringify({messageId:result.id,eventId,automatic:true,providerAccepted:false}));
       return {status:result.status,messageId:result.id,duplicate:!!result.duplicate,notice:result.status==='draft'?'Reminder draft prepared for review; no email sent':result.status==='consent_required'?'Saved; customer service-email consent is required':'Saved in the durable outbox; provider acceptance and inbox delivery are not yet confirmed'};
@@ -72,7 +78,7 @@ export function createNotificationService({db,shopName=process.env.SHOP_NAME || 
       WHERE a.status='scheduled' AND consent.service_email=1 AND julianday(a.starts_at)>julianday(?) AND julianday(a.starts_at)<=julianday(?)
       ORDER BY a.starts_at LIMIT 100`).all(new Date(start).toISOString(),new Date(end).toISOString());
     return {drafts:appointments.map(appointment=>queueEvent('appointment_reminder',{customer_id:appointment.customer_id,customer_name:appointment.customer_name},
-      {eventId:`appointment:${appointment.id}:${appointment.starts_at}:reminder`,title:appointment.title,startsAt:appointment.starts_at,draft:true}))};
+      {appointmentId:appointment.id,managementRevision:appointment.management_revision,title:appointment.title,startsAt:appointment.starts_at,draft:true}))};
   }
 
   function start() {

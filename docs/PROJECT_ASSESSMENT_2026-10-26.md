@@ -2,6 +2,8 @@
 
 Assessment date: October 26, 2026. Application reviewed: `81cd8a1be01f5b9cbc197faa1b53aa69ab64b137`, version `11.1.0-preview.1`.
 
+Follow-up implementation: [correctness and interface milestone](CORRECTIONS_2026-10-26.md). The findings below preserve the assessment baseline; current verification and remaining work are tracked in [PROJECT_STATE.md](PROJECT_STATE.md).
+
 ## Decision
 
 Keep developing this as one shop system. The core features are useful, but the current release should remain a review-only build until the correctness defects below are fixed. Passing the existing automated suite does not establish that every workflow works: additional checks found failures outside its coverage.

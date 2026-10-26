@@ -1,6 +1,6 @@
 {
   "name": "ownertracker-v11-pos-suite",
-  "version": "11.1.0-preview.1",
+  "version": "11.1.0-preview.2",
   "private": true,
   "type": "module",
   "engines": {

@@ -19,7 +19,7 @@ function fixture() {
       invoice_issued_at TEXT,invoice_address_snapshot_json TEXT,tax_bps INTEGER,subtotal_cents INTEGER,
       tax_cents INTEGER,total_cents INTEGER,voided_at TEXT);
     CREATE TABLE retail_special_lines(id INTEGER PRIMARY KEY,retail_order_id INTEGER,description TEXT,
-      requested_sku TEXT,quantity INTEGER,unit_price_cents INTEGER,taxable INTEGER);
+      requested_sku TEXT,quantity INTEGER,unit_price_cents INTEGER,taxable INTEGER,vendor_sku TEXT);
     CREATE TABLE retail_payments(id INTEGER PRIMARY KEY,retail_order_id INTEGER,method TEXT,direction TEXT,
       amount_cents INTEGER,reference TEXT,status TEXT,created_at TEXT,voided_at TEXT,reason TEXT,
       void_reason TEXT,original_payment_id INTEGER,idempotency_key TEXT);
@@ -28,7 +28,7 @@ function fixture() {
     INSERT INTO work_order_lines VALUES(1,1,'Current local repair','LABOR',1,100,100);
     INSERT INTO retail_special_orders VALUES(1,1,'PART-TEST','2026-10-25 10:00:00',
       '{"street":"100 Original Way","city":"Phoenix","state":"AZ","zip":"85001"}',910,10000,910,10910,NULL);
-    INSERT INTO retail_special_lines VALUES(1,1,'Original drive belt','BELT-1',1,10000,1);`);
+    INSERT INTO retail_special_lines VALUES(1,1,'Original drive belt','BELT-1',1,10000,1,'VENDOR-BELT-1');`);
   installReceiptSnapshots(db);
   const snapshot = {
     refNumber: 'WO-ORIGINAL', unit: '2024 Yamaha', estimateCents: 10000,

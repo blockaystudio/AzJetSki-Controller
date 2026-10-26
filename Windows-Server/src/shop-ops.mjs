@@ -1,5 +1,6 @@
 import {makePurchaseTarget} from '../public/purchase-target.js';
-import {assertPurchaseAuthorized} from './shop-management.mjs';
+import {assertPurchaseAuthorized,receiveStock} from './shop-management.mjs';
+import {installInventoryMovements,inventoryInvoiceLines,recordInventoryAdjustment,stockRequestKey} from './inventory-movements.mjs';
 import {requireEditRevision} from './edit-revisions.mjs';
 // Owner Tracker V11: physical custody, counter queues, scheduling, and invoiced retail special orders.
 // All purchase submissions remain manual connector handoffs. Never represent a queued command as a completed purchase.
@@ -92,6 +93,7 @@ export function installShopOps(db){
     actor_id INTEGER REFERENCES users(id), created_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
   `);
+  installInventoryMovements(db);
   installFinancialControls(db,'retail');
   installReceiptSnapshots(db);
   installGoogleCalendar(db);
@@ -168,15 +170,16 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
         }catch(e){db.exec('ROLLBACK');throw e;}
         return respond(200,{ok:true,status:'in_lot'});
       }
-      if(current?.status!=='in_lot')return respond(409,{error:'Vehicle is not checked in'});
-      const wo=current.work_order_id?db.prepare('SELECT stage,balance,estimate_total,source FROM work_orders WHERE id=?').get(current.work_order_id):null;
-      const account=wo?.source==='manual'?accountBalance(db,'repair',current.work_order_id,Math.round(Number(wo.estimate_total)*100)):null;
-      if(wo&&((account?(account.dueCents>0||account.refundDueCents>0):Number(wo.balance)>0.005)||!['Ready','Picked Up','Closed'].includes(wo.stage)))return respond(409,{error:'Pickup blocked: repair must be Ready and payment settled'});
-      db.exec('BEGIN');try{
+      db.exec('BEGIN IMMEDIATE');try{
+        const checkedIn=db.prepare('SELECT * FROM unit_custody WHERE vehicle_id=?').get(id);
+        if(checkedIn?.status!=='in_lot')throw Object.assign(new Error('Vehicle is not checked in'),{status:409});
+        const wo=checkedIn.work_order_id?db.prepare('SELECT stage,balance,estimate_total,source FROM work_orders WHERE id=?').get(checkedIn.work_order_id):null;
+        const account=wo?.source==='manual'?accountBalance(db,'repair',checkedIn.work_order_id,Math.round(Number(wo.estimate_total)*100)):null;
+        if(wo&&((account?(account.dueCents>0||account.refundDueCents>0):Number(wo.balance)>0.005)||wo.stage!=='Ready'))throw Object.assign(new Error('Pickup blocked: repair must be Ready and payment settled'),{status:409});
         db.prepare("UPDATE unit_custody SET status='checked_out',checked_out_at=CURRENT_TIMESTAMP,checked_out_by=? WHERE vehicle_id=?").run(u.id,id);
-        db.prepare('INSERT INTO custody_events(vehicle_id,work_order_id,action,actor_id,notes) VALUES(?,?,?,?,?)').run(id,current.work_order_id,'check_out',u.id,str(data.notes));
-        if(current.work_order_id)db.prepare("UPDATE work_orders SET stage='Picked Up',updated_at=CURRENT_TIMESTAMP WHERE id=? AND stage='Ready'").run(current.work_order_id);
-        audit(db,u,'Vehicle checked out',{vehicle:id},current.work_order_id);db.exec('COMMIT');
+        db.prepare('INSERT INTO custody_events(vehicle_id,work_order_id,action,actor_id,notes) VALUES(?,?,?,?,?)').run(id,checkedIn.work_order_id,'check_out',u.id,str(data.notes));
+        if(checkedIn.work_order_id)db.prepare("UPDATE work_orders SET stage='Picked Up',date_closed=COALESCE(NULLIF(date_closed,''),CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP WHERE id=? AND stage='Ready'").run(checkedIn.work_order_id);
+        audit(db,u,'Vehicle checked out',{vehicle:id},checkedIn.work_order_id);db.exec('COMMIT');
       }catch(e){db.exec('ROLLBACK');throw e;}
       return respond(200,{ok:true,status:'checked_out'});
     }
@@ -340,6 +343,10 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
       const retail=db.prepare(`SELECT l.id line_id,r.invoice_number,c.name customer_name,l.description FROM retail_special_lines l JOIN retail_special_orders r ON r.id=l.retail_order_id JOIN customers c ON c.id=r.customer_id WHERE r.invoice_issued_at IS NULL AND l.vendor_id IS NOT NULL`).all();
       return respond(200,{repairWithoutInvoiceOrApproval:repair,retailWithoutInvoice:retail,total:repair.length+retail.length,policy:'All purchases require an issued invoice, signed repair approval, or explicit approved stock-replenishment record.'});
     }
+    if(p==='/api/shop/inventory-invoice-lines'&&req.method==='GET'){
+      if(!purchasing())return deny('inventory_adjustment');
+      return respond(200,inventoryInvoiceLines(db,url.searchParams.get('scope'),url.searchParams.get('invoice')));
+    }
     if(p==='/api/shop/inventory'&&req.method==='GET'){
       if(!u)return deny();
       const stock=db.prepare('SELECT item_sku sku,SUM(quantity_delta) on_hand FROM inventory_adjustments GROUP BY item_sku ORDER BY item_sku LIMIT 500').all();
@@ -356,21 +363,22 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
       return respond(201,{id:Number(x.lastInsertRowid),status:'approved_waiting_purchase',stockAdded:0});
     }
     if(p==='/api/shop/inventory-adjustments'&&req.method==='POST'){
-      if(!purchasing())return deny('inventory_adjustment');const d=await b(),delta=Number(d.quantityDelta),reason=str(d.reason,80),sku=str(d.sku,100),refType=str(d.referenceType,40),refId=str(d.referenceId,100);
+      if(!purchasing())return deny('inventory_adjustment');const d=await b(),delta=Number(d.quantityDelta),reason=str(d.reason,80),sku=str(d.sku,100),refType=str(d.referenceType,40),refId=str(d.referenceId,180);
       if(!sku||!Number.isInteger(delta)||delta===0||!['received','sold','return','damage','cycle_count'].includes(reason)||!refType||!refId)return respond(400,{error:'SKU, signed quantity, reason, and documented reference required'});
       if(reason==='return')return respond(409,{error:'Receive customer returns through Accounting with the original stock sale and credit note; manual return adjustments are disabled'});
       if(['damage','cycle_count'].includes(reason)&&!['owner','manager'].includes(u.role))return deny('inventory_writeoff_or_stock_count');
-      if(reason==='received'&&(refType!=='supplier_order'||delta<0))return respond(409,{error:'Receiving stock requires positive quantities and a supplier order confirmation reference'});
-      if(reason==='sold'){
-        if(refType!=='invoice'||delta>=0)return respond(409,{error:'Stock sales require a negative quantity against an issued customer invoice'});
-        const linkedRetail=db.prepare('SELECT id FROM retail_special_orders WHERE invoice_number=? AND invoice_issued_at IS NOT NULL').get(refId);
-        const linkedRepair=db.prepare('SELECT id FROM ot_invoices WHERE number=? AND voided_at IS NULL').get(refId);
-        if(!linkedRetail&&!linkedRepair)return respond(409,{error:'Inventory sale blocked: invoice reference is not an issued customer invoice'});
+      if(reason==='received'){
+        if(refType!=='supplier_order'||delta<0)return respond(409,{error:'Receiving stock requires positive quantities and a supplier order confirmation reference'});
+        stockRequestKey(d);
+        const lineId=Number(d.receivingLineId);
+        if(!Number.isSafeInteger(lineId)||lineId<1)return respond(409,{error:'Choose an exact supplier receiving line through Management receiving'});
+        const line=db.prepare('SELECT sku FROM receiving_order_lines WHERE id=?').get(lineId);
+        if(!line||line.sku!==String(d.sku??'').trim())return respond(409,{error:'Receiving SKU must match the exact supplier order line'});
+        const result=receiveStock(db,u,lineId,{operation:'receive',quantity:delta,reference:d.referenceId,idempotencyKey:d.idempotencyKey??d.idempotency_key});
+        return respond(result.duplicate?200:201,result);
       }
-      const existing=db.prepare('SELECT COALESCE(SUM(quantity_delta),0) on_hand FROM inventory_adjustments WHERE item_sku=?').get(sku).on_hand;
-      if(existing+delta<0)return respond(409,{error:'Inventory cannot go negative; investigate missing stock first'});
-      const x=db.prepare('INSERT INTO inventory_adjustments(item_sku,quantity_delta,reason,reference_type,reference_id,actor_id) VALUES(?,?,?,?,?,?)').run(sku,delta,reason,refType,refId,u.id);
-      audit(db,u,'Inventory adjustment',{sku,delta,reason,refType,refId});return respond(201,{id:Number(x.lastInsertRowid)});
+      const result=recordInventoryAdjustment(db,u,d);
+      return respond(result.duplicate?200:201,result);
     }
     if(p==='/api/desktop-agent/retail-commands'&&req.method==='GET'){
       if(!bridgeToken||req.headers.authorization!==`Bearer ${bridgeToken}`)return respond(401,{error:'Invalid desktop token'});

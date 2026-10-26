@@ -2,6 +2,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import {jobIdentityFields,jobIdentityFingerprint} from './job-policy.mjs';
 
 const sha = value => crypto.createHash('sha256').update(String(value)).digest('hex');
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -10,11 +11,20 @@ const staffRoles = new Set(['owner','manager','service_writer','advisor']);
 
 export function installCustomerAccess(db) {
   const columns=new Set(db.prepare('PRAGMA table_info(customer_portal_tokens)').all().map(column=>column.name));
-  for(const definition of ["scope TEXT NOT NULL DEFAULT 'status'",'created_by INTEGER','revoked_at TEXT',"revocation_reason TEXT NOT NULL DEFAULT ''"]) {
+  for(const definition of ["scope TEXT NOT NULL DEFAULT 'status'",'created_by INTEGER','revoked_at TEXT',"revocation_reason TEXT NOT NULL DEFAULT ''","identity_sha256 TEXT NOT NULL DEFAULT ''"]) {
     if(!columns.has(definition.split(' ')[0]))db.exec(`ALTER TABLE customer_portal_tokens ADD COLUMN ${definition}`);
   }
   // Never retain an unlimited legacy bearer link. Invalid expiry is expired.
   db.exec("UPDATE customer_portal_tokens SET expires_at=datetime(created_at,'+30 days') WHERE expires_at IS NULL");
+  // Original recipients cannot be inferred for old, unbound links. Reissue them
+  // instead of silently binding a potentially reassigned job to its new owner.
+  db.exec("UPDATE customer_portal_tokens SET active=0,revoked_at=CURRENT_TIMESTAMP,revocation_reason='Legacy link requires identity-bound reissue' WHERE identity_sha256='' AND active=1");
+  const jobColumns=new Set(db.prepare('PRAGMA table_info(work_orders)').all().map(column=>column.name));
+  const changed=jobIdentityFields.filter(key=>jobColumns.has(key)).map(key=>`NEW.${key} IS NOT OLD.${key}`).join(' OR ');
+  db.exec(`DROP TRIGGER IF EXISTS work_order_identity_revoke_links;
+    CREATE TRIGGER work_order_identity_revoke_links AFTER UPDATE ON work_orders WHEN ${changed}
+    BEGIN UPDATE customer_portal_tokens SET active=0,revoked_at=CURRENT_TIMESTAMP,revocation_reason='Work-order customer or unit identity changed'
+      WHERE work_order_id=NEW.id AND active=1; END;`);
 }
 
 export function createCustomerAccess({db,currentUser,json,readBody,publicBaseUrl,shopName='Owner Tracker',shopPhone='',
@@ -34,9 +44,10 @@ export function createCustomerAccess({db,currentUser,json,readBody,publicBaseUrl
     if(typeof options==='number')options={days:options};
     const days=Number(options.days ?? 30),scope=options.scope ?? 'status';
     if(!Number.isInteger(days)||days<1||days>90||!['status','documents'].includes(scope))throw new Error('Use a status/documents scope and expiry of 1 to 90 days');
-    if(!db.prepare('SELECT id FROM work_orders WHERE id=?').get(workOrderId))throw new Error('Work order not found');
+    const job=db.prepare('SELECT * FROM work_orders WHERE id=?').get(workOrderId);
+    if(!job)throw new Error('Work order not found');
     const token=crypto.randomBytes(32).toString('base64url'),expiresAt=new Date(now()+days*86400_000).toISOString();
-    const result=db.prepare('INSERT INTO customer_portal_tokens(work_order_id,token_hash,expires_at,scope,created_by) VALUES(?,?,?,?,?)').run(workOrderId,sha(token),expiresAt,scope,options.user?.id || null);
+    const result=db.prepare('INSERT INTO customer_portal_tokens(work_order_id,token_hash,expires_at,scope,created_by,identity_sha256) VALUES(?,?,?,?,?,?)').run(workOrderId,sha(token),expiresAt,scope,options.user?.id || null,jobIdentityFingerprint(job));
     audit(options.user,'Customer link created',{linkId:Number(result.lastInsertRowid),scope,expiresAt},workOrderId);
     return `${base}/portal/${token}`;
   }
@@ -44,8 +55,8 @@ export function createCustomerAccess({db,currentUser,json,readBody,publicBaseUrl
     if(typeof token!=='string'||!/^[A-Za-z0-9_-]{40,}$/.test(token))return null;
     const link=db.prepare('SELECT * FROM customer_portal_tokens WHERE token_hash=? AND active=1 AND revoked_at IS NULL').get(sha(token));
     if(!link || !Number.isFinite(Date.parse(link.expires_at)) || Date.parse(link.expires_at)<=now())return null;
-    const job=db.prepare('SELECT id,ref_number,customer_name,unit_label,year,make,model,stage,estimate_total,paid_total,balance FROM work_orders WHERE id=?').get(link.work_order_id);
-    return job?{link,job}:null;
+    const job=db.prepare('SELECT * FROM work_orders WHERE id=?').get(link.work_order_id);
+    return job&&link.identity_sha256===jobIdentityFingerprint(job)?{link,job}:null;
   }
   function html(res,body,status=200) {
     res.writeHead(status,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer','x-content-type-options':'nosniff','content-security-policy':"default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'"});res.end(body);return true;

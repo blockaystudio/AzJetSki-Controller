@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import {openDb} from '../src/db.mjs';
 import {extendDatabase} from '../src/pos-extension.mjs';
 import {checkoutRoutes} from '../src/payment-docs.mjs';
@@ -21,6 +22,7 @@ function fixture(t) {
     notify:async(event,work,extra)=>{queued.push({event,work,extra});return {status:'queued'};}});
   async function issue(body={},waitForBody) {
     const path=`/api/pos/work-orders/${workOrderId}/invoices`,res={};
+    body={idempotencyKey:crypto.randomUUID(),expectedRevision:db.prepare('SELECT revision FROM work_orders WHERE id=?').get(workOrderId).revision,...body};
     assert.equal(await route({method:'POST',headers:{},body,waitForBody},res,path,new URL(path,'https://shop.example.test')),true);
     return res;
   }
@@ -47,20 +49,22 @@ test('a freshly issued taxable repair invoice backs its exact lines and rejects 
   assert.equal(hasPurchaseBacking(f.db,f.workOrderId),false,'a voided invoice cannot authorize purchasing');
 });
 
-test('invoice issuance snapshots fresh work metadata, tax and items after awaiting the request body',async t=>{
+test('invoice issuance rejects a body-time revision race, then snapshots the reviewed current state',async t=>{
   const f=fixture(t);
   let enterBody,releaseBody;
   const entered=new Promise(resolve=>enterBody=resolve),released=new Promise(resolve=>releaseBody=resolve);
   const pending=f.issue({},async()=>{enterBody();await released;});
   await entered;
   // Another desk finishes its changes while this HTTP request body is pending.
-  // All snapshot fields must be reread together after that asynchronous boundary.
+  // The original reviewed revision must be rejected after that asynchronous boundary.
   f.db.prepare(`UPDATE work_orders SET ref_number='WO-UPDATED',customer_name='Updated customer',email='updated@example.test',
     phone='555-0199',unit_label='Updated unit',tax_rate_bps=1000 WHERE id=?`).run(f.workOrderId);
   f.db.prepare("UPDATE work_order_lines SET description='Updated pump impeller',qty=2,rate=125,amount=250 WHERE id=?").run(f.lineId);
   applyOrderTax(f.db,f.workOrderId,'second-desk');
   releaseBody();
-  const result=await pending;assert.equal(result.status,201);
+  const stale=await pending;assert.equal(stale.status,409);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM ot_invoices').get().n,0);
+  const result=await f.issue();assert.equal(result.status,201);
   const invoice=f.retained(result.body.id),snapshot=JSON.parse(invoice.snapshot_json);
   assert.equal(invoice.recipient_name,'Updated customer');
   assert.equal(invoice.recipient_email,'updated@example.test');
@@ -89,4 +93,14 @@ test('an invoice recipient override cannot silently queue its link to the old cu
   const unchanged=await matchingRecipient.issue({email:'original@example.test',sendEmail:true});
   assert.equal(unchanged.status,201);assert.equal(unchanged.body.deliveryStatus,'queued');
   assert.equal(matchingRecipient.queued.length,1);assert.equal(matchingRecipient.queued[0].event,'invoice_issued');
+});
+
+test('a revised invoice replaces purchase backing while preserving its historical snapshot',async t=>{
+  const f=fixture(t),first=await f.issue();assert.equal(first.status,201);
+  f.db.prepare("UPDATE work_order_lines SET description='Revised impeller specification' WHERE id=?").run(f.lineId);
+  const revised=await f.issue({documentKind:'revised_invoice',supersedesInvoiceId:first.body.id});assert.equal(revised.status,201);
+  assert.equal(hasPurchaseBacking(f.db,f.workOrderId),true);
+  f.db.prepare("UPDATE work_order_lines SET description='Pump impeller' WHERE id=?").run(f.lineId);
+  assert.equal(hasPurchaseBacking(f.db,f.workOrderId),false,'a superseded invoice cannot authorize reverted work');
+  assert.match(f.retained(first.body.id).snapshot_json,/Pump impeller/);
 });

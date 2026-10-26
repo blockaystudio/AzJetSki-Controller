@@ -1,4 +1,5 @@
 import {requireEditRevision} from './edit-revisions.mjs';
+import {assertJobStageChange} from './job-policy.mjs';
 // Retained, versioned customer authorizations. Records are local to the shop;
 // email delivery and provider e-signatures are separate, explicitly configured services.
 import crypto from 'node:crypto';
@@ -208,6 +209,7 @@ export function authorizationRoutes({db,currentUser,json,readBody,publicBaseUrl=
     try {
       const result=transaction(db,()=>{
         const wo=order(db,id);
+        assertJobStageChange(wo,'Awaiting Approval');
         if(!Number.isFinite(wo.estimate_total)||wo.estimate_total<0)error(409,'Work order estimate is invalid');
         const active=db.prepare("SELECT * FROM approvals WHERE work_order_id=? AND revoked_at IS NULL AND superseded_by IS NULL AND snapshot_json<>'' ORDER BY id DESC").all(id);
         const prior=previous ?? active[0]?.id ?? null;
@@ -266,6 +268,8 @@ export function authorizationRoutes({db,currentUser,json,readBody,publicBaseUrl=
       }
       const signerName=text(input.signerName,200);
       if(!choices.has(input.choice)||input.agree!==true||signerName.length<2)error(400,'Choose an option, enter your full legal name, and explicitly accept electronic records and the terms');
+      const stage=input.choice==='Approve Repairs'?'In Progress':input.choice==='Diagnostics/Teardown Only'?'Diagnosing':'Declined';
+      assertJobStageChange(order(db,row.work_order_id),stage);
       const signedAt=new Date(now()).toISOString();
       const record={version:1,approvalId:row.id,workOrderId:row.work_order_id,snapshotSha256:row.snapshot_sha256,choice:input.choice,signerName,signedAt,electronicConsent:true,termsVersion:row.terms_version};
       const recordJson=JSON.stringify(record),recordHash=sha(recordJson);
@@ -275,7 +279,6 @@ export function authorizationRoutes({db,currentUser,json,readBody,publicBaseUrl=
       const updated=db.prepare(`UPDATE approvals SET status='completed',choice=?,signer_name=?,signed_at=?,signed_record_json=?,signed_record_sha256=?,document_name=?,document_sha256=? WHERE id=? AND status='sent'`)
         .run(input.choice,signerName,signedAt,recordJson,recordHash,documentName,sha(bytes),row.id);
       if(updated.changes!==1)error(409,'Authorization was already processed');
-      const stage=input.choice==='Approve Repairs'?'In Progress':input.choice==='Diagnostics/Teardown Only'?'Diagnosing':'Declined';
       const next=input.choice==='Approve Repairs'?'Begin work within the retained approved scope and amount':input.choice==='Diagnostics/Teardown Only'?'Diagnostics only; obtain another authorization for repairs':'Prepare unit for declined-work pickup';
       db.prepare('UPDATE work_orders SET stage=?,next_action=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(stage,next,row.work_order_id);
       audit(db,row.id,row.work_order_id,'Authorization completed','customer',{choice:input.choice,signerName,signedAt,snapshotSha256:row.snapshot_sha256,signedRecordSha256:recordHash,documentSha256:sha(bytes)});
