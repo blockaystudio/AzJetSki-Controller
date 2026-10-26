@@ -40,7 +40,9 @@ Updated: 2026-10-26. Read this checkpoint first; load only the relevant source/t
 - Browser: 9 routes at 390/768/1440, navigation/tabs, billing races, decimal amounts, reduced motion, contrast and counter sale through stock/split payment/pickup/receipt passed. See `docs/evidence/`.
 - Independent Sol Ultra review: three extra integration defects fixed and reverified; `handoffs/corrections_review.md`.
 - Upgrade: reissue legacy unbound status links; reconcile unattributed historical stock; imported financial data is protected from local edits; invoice callers require retry key/current revision.
-- Publishing: main developer is saving this milestone and refreshing the private review; consult GitHub CI for the commit's platform results.
+- Published application commit: `080cc16`; CI compatibility follow-up: `bb739ac` (application source unchanged). [Application, browser and launcher CI](https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40396656844) passed; [Windows install/rollback](https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40396336668) passed.
+- Private review updated and externally verified over HTTPS: login, new assets, staff APIs and reissued fictional customer link. Review data/settings preserved; pre-upgrade backup: runtime `backups/ownertracker-MgV6GR`.
+- Portable outputs: `/workspace/OwnerTracker-preview2-release` (95 verified files), `/workspace/OwnerTracker-V11-preview2.zip`, `/workspace/OwnerTracker-V11-preview2.git.bundle`. Source/runtime remain separate.
 - Next development: unified job workspace/intake, further shared operations and staff acceptance. Hardware, permanent hosting, actual provider delivery and real-data recovery require separate shop acceptance.
 
 ## Context storage
@@ -50,4 +52,5 @@ The requested Google Drive folder holds the plan and compact checkpoint snapshot
 - [Drive project folder](https://drive.google.com/drive/folders/1SMdizJKuDJaa7AXDfuCZGL0BBI5FJyUp)
 - Plan file ID: `18u_4I4fxBZG9rjoqbAFDz2EkFHH7rVOE`
 - Progress file ID: `1eMNo1v4-C64jhrADkXu6cg3b4p3_vfN1`
+- Milestone results file ID: `1t5wwNc5E0i6EBPYjZ_-CwKXfVLFXk_qb`
 - Replace these existing file contents for future snapshots; do not create another project folder each turn.

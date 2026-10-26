@@ -21,6 +21,8 @@ The durable browser suite `Windows-Server/test/browser-shop.py` covers nine rout
 
 Measured text contrast on the tested shared surfaces: 15.17:1 body text, 8.90:1 secondary text, 11.96:1 green action text. These checks do not constitute a complete accessibility certification. See [contrast measurements](evidence/ui-contrast-preview2.json), [phone screenshot](evidence/shop-today-mobile-preview2.png) and [desktop screenshot](evidence/shop-today-desktop-preview2.png).
 
+Remote verification passed: [application/browser/launcher CI](https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40396656844) and [Windows installation/rollback](https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40396336668). The browser job uses Ubuntu 24.04 for compatibility with its pinned Playwright version. The updated private site also passed external HTTPS checks for sign-in, assets, staff APIs and the refreshed sample customer status link.
+
 ## Upgrade behavior
 
 - Legacy customer status links without identity binding are revoked rather than silently assigned to a possibly different customer. Staff must issue fresh links. Retained authorization and invoice records remain available.
