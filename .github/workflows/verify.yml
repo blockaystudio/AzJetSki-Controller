@@ -46,7 +46,8 @@ jobs:
           path: ${{ runner.temp }}/OwnerTrackerDesktop.exe
 
   browser-workflows:
-    runs-on: ubuntu-latest
+    # Keep the browser OS aligned with the pinned Playwright browser build.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
