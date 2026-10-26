@@ -1,5 +1,7 @@
 # Single-shop review release — 11.1.0-preview.1
 
+**Follow-up assessment, October 26:** [Current findings and UI development plan](PROJECT_ASSESSMENT_2026-10-26.md) records defects discovered beyond the existing passing tests. The feature inventory below describes implemented code, not complete acceptance of every workflow.
+
 This release is for AZ Jet Ski, Boats & Powersports. It does not add other shops, public registration, subscriptions, or multi-tenant billing.
 
 The private review is **https://azjetski-ownertracker-review.wholeclock.chatgpt.site**. It runs the actual application and SQLite database through an authenticated review transport, using fictional records. It is not a static mock. Sign in with the review account shown on the sign-in screen; its credentials are for fictional data only. Use **Control Center** to examine every module and the sample customer journeys.

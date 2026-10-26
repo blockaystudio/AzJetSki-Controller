@@ -2,6 +2,8 @@
 
 **Current: single-shop review release 11.1.0-preview.1.** [Open the private review](https://azjetski-ownertracker-review.wholeclock.chatgpt.site) · [Feature coverage, review steps and deployment limits](docs/SHOP_LAUNCH_REVIEW.md). The review uses fictional records and requires its managed runtime to remain active.
 
+**October 26 assessment:** [Correctness findings, feature simplification and UI development plan](docs/PROJECT_ASSESSMENT_2026-10-26.md). Existing automated tests pass, but additional workflow and browser checks identified release-blocking defects; this remains a review-only build.
+
 One Windows POS/server with a shared SQLite database, desktop order receiver, owner and technician web clients, and native iOS source for AZ Jet Ski, Boats & Powersports.
 
 The supplied **Complete Suite** and **Windows POS** ZIPs contain the same 80 files after removing the Complete Suite's outer `OwnerTracker-V11/` directory. This repository combines them without duplicating the server or databases. Original V11 installation, acceptance, release and long-term planning documents are retained. See [assembly provenance](docs/ASSEMBLY.md).
