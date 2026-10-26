@@ -6,7 +6,7 @@ Assessment date: October 26, 2026. Application reviewed: `81cd8a1be01f5b9cbc197f
 
 Keep developing this as one shop system. The core features are useful, but the current release should remain a review-only build until the correctness defects below are fixed. Passing the existing automated suite does not establish that every workflow works: additional checks found failures outside its coverage.
 
-Prioritize repair intake through customer pickup, with counter parts sales retained as a separate entry point. This is a working product assumption, not a decision to remove counter sales. Simplification should first change navigation and defaults. Do not delete records, financial history, retained authorizations, or integrations merely because their controls move out of everyday screens.
+The owner confirmed equal priority for service repairs and counter parts sales. Deliver both in the first simplified shop interface, with equally prominent entry points and acceptance gates. Simplification should first change navigation and defaults. Do not delete records, financial history, retained authorizations, or integrations merely because their controls move out of everyday screens.
 
 This assessment changes documentation only. It does not repair the defects listed below or change the running review application.
 
@@ -34,7 +34,7 @@ The full application command was `node Windows-Server/test/run-suite.mjs`; trans
 | Customer status/document links | Keep after correction | Bind access to the right customer and revoke on permitted identity corrections |
 | Invoices, deposits, split payments, pending Zelle, receipts | Keep as core | One account summary with clear customer due versus refund owed; fix decimals and job selection |
 | Credits, refunds, cancellations, original-sale returns | Keep, with role restrictions | Combine their UI under the original transaction; test complete credit/refund/stock sequences |
-| Counter parts sales and special orders | Keep | Separate counter-sale entry, shared customer/account components; no invented vehicle required |
+| Counter parts sales and special orders | Keep as core, equally prioritized with repairs | Prominent counter-sale entry, shared customer/account components; no invented vehicle required |
 | Parts requests, supplier carts, partial receiving, bins/barcodes | Keep the manual workflow | Unify old/new stock entry, enforce retry safety and actual invoice-line/SKU quantities |
 | Purchasing limits and independent approvals | Keep as configurable owner policy | Match actual staffing; explain blocked requests; do not weaken backend controls to simplify UI |
 | Employee roles, sessions, recovery, concurrent-edit protection | Keep | Role-specific screens; consider a shared “Service advisor” UI label only after reviewing purchasing differences |
@@ -82,9 +82,9 @@ Accessibility inspection also found click-only job rows, placeholder-only login 
 
 Use a shared navigation shell with six daily destinations: **Today, Jobs, Customers & Units, Parts & Inventory, Payments, Schedule**. Keep **Reports** and **Settings** in a secondary owner/manager menu. Show only destinations/actions relevant to the signed-in role. Technician home should be **My Jobs**, with photos, notes and part requests close at hand. This consolidates the current owner's 17 main destinations plus separate Operations and Management tabs.
 
-The Today screen should answer: what needs my attention, who is waiting for approval or parts, what is ready but unpaid, and what can be released. Each count must open its filtered records. Always display the active customer/unit/job when performing work or financial actions.
+The Today screen should give **New Repair / Check In** and **New Counter Sale** equal prominence. It should answer: what needs my attention, who is waiting for approval or parts, what is ready but unpaid, and what can be released. Show repair and retail queues distinctly, including retail special orders awaiting parts, payment or pickup. Each count must open its filtered records. Always display the active customer and job/unit or counter-sale identity when performing work or financial actions.
 
-A job should have one persistent header (customer, unit, status, assigned staff, approved amount, current total, paid and due/refund owed) with focused sections: **Overview, Estimate & Approval, Work & Photos, Parts, Payments & Documents, History**. Billing, approvals and returns should open in that job context. Counter sales should use the same financial controls with their own sale identity.
+A job should have one persistent header (customer, unit, status, assigned staff, approved amount, current total, paid and due/refund owed) with focused sections: **Overview, Estimate & Approval, Work & Photos, Parts, Payments & Documents, History**. Billing, approvals and returns should open in that job context. A counter-sale workspace should support item/barcode lookup, stock availability, quantities, price/tax, special orders, payment and receipt without requiring a vehicle. Use the same financial controls with a persistent sale/customer identity, and contextual returns/refunds from the original sale.
 
 Replace browser prompts and raw identifiers with labeled forms, searchable selectors and accessible dialogs. Explain the next action when an operation is blocked. Show “Draft,” “Queued,” “Accepted by provider,” “Delivery unknown,” and “Failed” accurately; do not label a queued update “sent.” Hide unconfigured provider actions from the normal workflow and place their setup in Settings.
 
@@ -98,8 +98,8 @@ The current mobile dashboard illustrates the layout work required. This screensh
 | --- | --- | --- |
 | 1. Correctness foundation | A01–A11 and A13 fixes; one backend operation for each financial edit, invoice issue, stock movement, identity correction and terminal job transition | Add a failing regression for each reproduced defect, then pass it; no partial write after rejection; duplicate request creates one movement/document; old customer access invalid; cancelled reminders cannot send; socket errors cannot stop the server |
 | 2. Shared UI foundation | A12/A14/A15 fixes; consistent shell, navigation, form controls, money/status components, loading/error/empty states and session handling | Desktop and 390px layouts usable without page overflow; keyboard labels/focus/dialogs work; decimal amounts accepted; stale requests cannot change the active record; no dead-end menu choices or false success messages |
-| 3. Complete service journey | Today queue, guided customer/unit check-in, unified job workspace, estimate/revised approval, tech updates, parts and pickup | Front desk and technician complete a realistic job without copying numeric IDs or switching between separate billing/management applications; approval and financial history remain accessible |
-| 4. Counter sales and owner operations | Shared payments/credit/refund/return UI; unified inventory receiving and stock counts; calendar, daily close and settings | Split tender, pending Zelle, partial return/refund and daily close reconcile; repeated receipt is harmless; owner can understand and resolve purchase approval blocks |
+| 3. Complete both daily workflows | Develop repair intake → approval → work/parts → payment → pickup alongside counter sale → items/stock or special order → payment → receipt/pickup; shared Today screen and contextual financial controls | Both journeys pass before this phase completes. Staff need no raw IDs or disconnected billing pages; repairs preserve approval/history; counter sales require no vehicle and correctly handle stock, special orders and amounts due |
+| 4. Shared operations and exceptions | Complete credit/refund/return handling for both workflows; unified inventory receiving and stock counts; calendar, daily close and settings | Repair and retail split tender, pending Zelle, partial return/refund and combined daily close reconcile; repeated receipt is harmless; owner can understand and resolve purchase approval blocks |
 | 5. Shop pilot and deployment | Permanent host, real staff accounts, initial data reconciliation, Windows/phone/peripheral walkthrough and recovery runbook | Actual devices pass the journeys below; encrypted backup restores database and files; chosen live providers pass acceptance; pilot records reconcile before replacing the current process |
 
 Work in reviewable increments: one corrected operation or one complete screen/journey per change. Reuse the current Node/SQLite application and shared browser modules initially; a framework rewrite is not required to deliver these improvements. Shared backend commands should perform revision/invariant validation, mutation, recalculation, audit and outbox writes in one transaction, with network delivery outside the transaction. Retain old URLs as context-preserving redirects while replacing duplicate screens. Retire old write routes only after verifying all web/native callers.
@@ -108,6 +108,10 @@ Run early Windows/iPhone smoke checks with fictional data alongside phases 2–3
 
 ## Acceptance checklist for the redesigned release
 
+- [ ] Both New Repair / Check In and New Counter Sale are immediately accessible from Today; neither workflow is deferred to a later release.
+- [ ] Complete an in-stock counter sale with item/barcode lookup, quantity, tax, split payment and receipt; confirm stock changes once and no vehicle is required.
+- [ ] Complete a counter special order through invoice/deposit, reviewed purchasing, partial receiving, final payment and pickup; unpaid/pending-only sales cannot be released.
+- [ ] Record a partial counter-sale return and original-payment refund; verify stock disposition, retained history and daily close alongside repair transactions.
 - [ ] Existing customer with two units: check in both, create one job per unit, count one customer/two units, and release only the selected paid/ready unit.
 - [ ] Create an estimate including cents, tax and quantity; correct a description on a paid taxable job; confirm failed amount changes leave no persisted mutation.
 - [ ] Customer approves, declines or authorizes diagnosis; revised scope requires a fresh approval; superseded/expired links behave correctly and signed PDF/record remain retrievable.
