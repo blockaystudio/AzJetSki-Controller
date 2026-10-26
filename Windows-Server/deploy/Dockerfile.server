@@ -1,0 +1,16 @@
+FROM node:22-bookworm-slim
+WORKDIR /app
+COPY package.json ./
+COPY src ./src
+COPY public ./public
+COPY scripts ./scripts
+# Docker copies these ownership/mode settings into newly created named volumes.
+RUN chmod -R a=rX /app/src /app/public /app/scripts \
+    && chmod a=r /app/package.json \
+    && install -d -m 0700 -o node -g node /app/data /app/backups
+ENV NODE_ENV=production PORT=8787 HOST=0.0.0.0 OWNERTRACKER_DB=/app/data/ownertracker.sqlite
+USER node
+EXPOSE 8787
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:8787/health',{signal:AbortSignal.timeout(4000)}).then(async r=>{if(!r.ok||!(await r.json()).ok)process.exit(1)}).catch(()=>process.exit(1))"
+CMD ["sh", "-c", "umask 0077; exec node src/server.mjs"]

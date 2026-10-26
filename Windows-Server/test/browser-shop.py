@@ -2,6 +2,7 @@
 Run: python test/browser-shop.py (requires playwright + Chromium).
 """
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -10,7 +11,9 @@ import subprocess
 import tempfile
 import time
 import urllib.request
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
+from browser_workspace import run_workspace_journeys, responsive
+from browser_operations import run_operations_journeys
 
 SOURCE = Path(__file__).resolve().parents[1]
 NODE = os.environ.get('OWNERTRACKER_NODE', 'node')
@@ -19,8 +22,14 @@ ARTIFACTS.mkdir(parents=True, exist_ok=True)
 PASSWORD = 'Review-Only-2026!'
 
 
+def session_headers(page):
+    # Chromium permits Secure cookies on trustworthy loopback origins. The
+    # Playwright request client does not, so forward this disposable session.
+    return {'cookie': '; '.join(f'{cookie["name"]}={cookie["value"]}' for cookie in page.context.cookies())}
+
+
 def api(page, path, method='GET', body=None):
-    response = page.request.fetch(page.url.split('/', 3)[0] + '//' + page.url.split('/', 3)[2] + path, method=method, data=body)
+    response = page.request.fetch(page.url.split('/', 3)[0] + '//' + page.url.split('/', 3)[2] + path, method=method, data=body, headers=session_headers(page))
     value = response.json()
     assert response.ok, (path, response.status, value)
     return value
@@ -80,12 +89,9 @@ def run(base):
                     for tab in ['receiving', 'communications', 'schedule', 'connections']:
                         page.locator(f'[data-tab="{tab}"]').click()
                         no_overflow(page, f'management/{tab} at {width}')
-        # Decimal validation in the actual desk forms, and keyboard navigation.
-        visit(page, base, '/?view=newwo', '#newWorkOrder')
-        amount = page.locator('#newWorkOrder [name=estimate_total]')
-        amount.fill('100.50')
-        assert amount.evaluate('(e)=>e.checkValidity() && !e.validity.stepMismatch')
-        assert amount.get_attribute('inputmode') == 'decimal'
+        # Guided repair intake, contextual accounts and retained approvals use the real server.
+        run_workspace_journeys(page, base, ARTIFACTS, api, no_overflow)
+        # Keyboard navigation remains available from the work-order list.
         visit(page, base, '/?view=workorders', '#list a.job-link')
         link = page.locator('#list a.job-link').first
         link.focus()
@@ -149,29 +155,34 @@ def run(base):
         page.locator('#retailAdd [name=unitPrice]').fill('100.50')
         page.locator('#retailAdd').get_by_role('button', name='Add Line', exact=True).click()
         page.locator('#retailDetail tbody tr').wait_for()
-        page.on('dialog', lambda dialog: dialog.accept())
+        accept_dialog = lambda dialog: dialog.accept()
+        page.on('dialog', accept_dialog)
         page.locator('#issueRetail').click()
-        page.locator('#retailPay').wait_for()
+        page.locator('[data-account-workspace][data-scope=retail] [data-account-payment]').wait_for()
         page.locator('[data-stock-sale]').click()
         page.locator('[data-status=picked_up]').wait_for()
         order = next(row for row in api(page, '/api/shop/retail-orders')['orders'] if row['id'] not in existing)
         for amount, method in [('50.00','cash'), ('59.65','card_dejavoo')]:
-            page.locator('#retailPay [name=method]').select_option(method)
-            page.locator('#retailPay [name=amount]').fill(amount)
-            page.locator('#retailPay [name=reference]').fill('FICTIONAL-BROWSER-RECEIPT')
-            page.locator('#retailPay [name=verified]').check()
-            page.locator('#retailPay button').click()
-            page.wait_for_function("document.querySelector('#retailPay [name=amount]').value === ''")
+            page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] [name=method]').select_option(method)
+            page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] [name=amount]').fill(amount)
+            page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] [name=reference]').fill('FICTIONAL-BROWSER-RECEIPT')
+            page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] [name=verified]').check()
+            page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] button').click()
+            expect(page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] [name=amount]')).to_have_value('')
         paid = api(page, f"/api/shop/retail-orders/{order['id']}")['order']
         assert paid['paymentTotals']['due'] == 0
         assert len(paid['payments']) == 2
+        expect(page.locator('[data-account-workspace][data-scope=retail] [data-finance-panel]')).to_contain_text('FICTIONAL-BROWSER-RECEIPT')
+        responsive(page, ARTIFACTS, no_overflow, 'counter-paid-ledger')
         page.locator('[data-status=picked_up]').click()
         page.wait_for_function("!document.querySelector('[data-status=picked_up]')")
         stock = api(page, '/api/shop/inventory')['stock']
         assert next(row['on_hand'] for row in stock if row['sku'] == 'REVIEW-SERVICE-KIT') == 2
         assert api(page, f"/api/shop/retail-orders/{order['id']}")['order']['lines'][0]['status'] == 'picked_up'
-        receipt = page.request.get(base + f"/api/receipts/retail/{order['id']}")
+        receipt = page.request.get(base + f"/api/receipts/retail/{order['id']}", headers=session_headers(page))
         assert receipt.ok and 'text/html' in receipt.headers.get('content-type', '')
+        page.remove_listener('dialog', accept_dialog)
+        run_operations_journeys(page, base, ARTIFACTS, api, no_overflow)
         # Numeric WCAG contrast checks for actual shared computed colors.
         visit(page, base, '/', '#view .metrics')
         colors = page.evaluate("""()=>({text:getComputedStyle(document.body).color,panel:getComputedStyle(document.querySelector('.card')).backgroundColor,muted:getComputedStyle(document.querySelector('.muted')).color,green:getComputedStyle(document.querySelector('.daily-action')).backgroundColor,buttonText:getComputedStyle(document.querySelector('.daily-action')).color,focus:getComputedStyle(document.documentElement).getPropertyValue('--focus').trim()})""")
@@ -188,7 +199,7 @@ def run(base):
         print('Contrast ratios:', ratios, flush=True)
         assert not errors, errors
         browser.close()
-        print('PASS: nine pages at 390/768/1440; operations/management tabs; equal daily entry points; decimal input; keyboard focus; reduced motion; billing deselection/races; mobile empty states; counter sale stock/split-payment/pickup/receipt; truthful outcomes')
+        print('PASS: nine pages at 390/768/1440; operations/management tabs; equal daily entry points; decimal input; keyboard focus; reduced motion; billing deselection/races; mobile empty states; guided customer/unit intake; job tabs/deep links/unsaved guards; retained revised approvals; contextual invoice/payment ledger; counter stock/special-order partial-receipt retry/payment/pickup; partial return/original-payment refund/combined close; truthful outcomes')
 
 
 def main():
@@ -198,13 +209,18 @@ def main():
         for name in ['src', 'public', 'scripts']:
             shutil.copytree(SOURCE / name, runtime / name)
         shutil.copy2(SOURCE / 'package.json', runtime / 'package.json')
+        manifest = {str(path.relative_to(runtime)): hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in sorted(runtime.rglob('*')) if path.is_file()}
+        (ARTIFACTS / 'source-manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True))
         (runtime / 'data').mkdir()
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0))
             port = sock.getsockname()[1]
         base = f'http://127.0.0.1:{port}'
         env = {key: os.environ[key] for key in ['PATH', 'SystemRoot', 'TEMP', 'TMP'] if key in os.environ}
-        env.update({'HOST':'127.0.0.1','PORT':str(port),'PUBLIC_BASE_URL':base,'OWNERTRACKER_REVIEW':'true','OWNERTRACKER_DB':str(runtime/'data/browser.sqlite'),'OWNERTRACKER_ADMIN_PASSWORD':PASSWORD,'OWNERTRACKER_SESSION_SECRET':'browser-only-session-secret','QBPOS_BRIDGE_TOKEN':'browser-only-bridge','DESKTOP_AGENT_TOKEN':'browser-only-agent','AUTO_BUILD_PROCUREMENT':'false','AUTO_SUPPLIER_LOOKUP':'false','REQUIRE_EDIT_REVISION':'true'})
+        # Generated customer links require HTTPS, but every request/seed stays on loopback.
+        # No public URL is opened, and only this explicit source-only environment reaches Node.
+        env.update({'HOST':'127.0.0.1','PORT':str(port),'PUBLIC_BASE_URL':'https://browser.ownertracker.example.invalid','OWNERTRACKER_REVIEW':'true','OWNERTRACKER_DB':str(runtime/'data/browser.sqlite'),'OWNERTRACKER_ADMIN_PASSWORD':PASSWORD,'OWNERTRACKER_SESSION_SECRET':'browser-only-session-secret','QBPOS_BRIDGE_TOKEN':'browser-only-bridge','DESKTOP_AGENT_TOKEN':'browser-only-agent','AUTO_BUILD_PROCUREMENT':'false','AUTO_SUPPLIER_LOOKUP':'false','REQUIRE_EDIT_REVISION':'true'})
         with (ARTIFACTS/'server.log').open('w') as log:
             server = subprocess.Popen([NODE, 'src/server.mjs'], cwd=runtime, env=env, stdout=log, stderr=subprocess.STDOUT)
             try:

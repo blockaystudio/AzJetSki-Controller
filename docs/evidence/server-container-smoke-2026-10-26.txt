@@ -1,0 +1,40 @@
+OwnerTracker permanent-server package verification — 2026-10-26
+
+Scope: disposable local Docker containers and named volumes, fictional records,
+random loopback HTTP port. No public domain, certificate, or cloud VM provisioned.
+
+Environment: Docker Engine 28.4.0 (vfs), Docker Compose 2.40.3, supported Node 22.
+Images: node:22-bookworm-slim and caddy:2, pulled through configured daemon proxy.
+
+Repeatable command from repository root:
+  python3 Windows-Server/test/server-deployment-smoke.py
+Requires Node 22.16+ within 22.x on PATH (or OWNERTRACKER_NODE), Python 3,
+Docker Engine local Unix socket, and Compose >= 2.24.4.
+
+Final successful output:
+PASS: server image builds from the supplied source and private context exclusions
+PASS: actual server Compose file parses and waits for a healthy app
+PASS: UID 1000, node-owned persistent volumes, read-only root, dropped capabilities, restart policy, no public app port, private files absent from image
+PASS: loopback HTTP request through real Caddy reverse proxy reaches app health
+PASS: no demo customers; SQLite + upload survive container restart; scheduled encrypted startup backup succeeds
+PASS: encrypted archive decrypted and restored database + attachment; pre-restore recovery copy retained; restored app healthy
+VERIFIED LOCAL ONLY: no public DNS, public certificate, or paid host provisioned
+Disposable test containers, networks, volumes, and generated secrets removed
+
+Focused bootstrap test result: 3/3 passed using Node 22 --test.
+Verified public-domain validation; independent random password and keys; private
+0700 directory/0600 files; no key/password output; refusal to overwrite an
+existing setup; rejection of symbolic-link parent directories.
+
+Issues found by the container checks and corrected before the passing run:
+1. Source/release files can have 0600/0700 modes. Docker COPY preserved those
+   modes with root ownership, preventing non-root Node from reading the app.
+   Dockerfile.server now makes only source/package files readable and source
+   directories traversable before switching users; runtime root stays read-only.
+2. An inherited outbound HTTP proxy intercepted Caddy's private upstream request.
+   Compose now appends ownertracker to existing proxy exclusions, preserving
+   inherited proxy settings for external traffic.
+
+Limits: this verifies container restart persistence, not an actual host reboot,
+provider disk loss, public ACME issuance, real device/provider acceptance, or a
+real-data recovery. Public DNS/HTTPS and offsite recovery remain launch checks.

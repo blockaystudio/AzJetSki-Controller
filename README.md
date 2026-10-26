@@ -1,8 +1,8 @@
 # OwnerTracker V11
 
-**Current: single-shop review release 11.1.0-preview.2.** [Open the private review](https://azjetski-ownertracker-review.wholeclock.chatgpt.site) · [Corrections and interface update](docs/CORRECTIONS_2026-10-26.md) · [Compact project checkpoint](docs/PROJECT_STATE.md). The review uses fictional records and requires its managed runtime to remain active.
+**Current: single-shop review release 11.1.0-preview.3.** [Open the private review](https://azjetski-ownertracker-review.wholeclock.chatgpt.site) · [Job workspace and server preparation](docs/WORKSPACE_MILESTONE_2026-10-26.md) · [Compact project checkpoint](docs/PROJECT_STATE.md). The review uses fictional records and requires its managed runtime to remain active.
 
-**October 26 assessment:** [Correctness findings, feature simplification and UI development plan](docs/PROJECT_ASSESSMENT_2026-10-26.md). The identified corrections are implemented in preview.2, with 213 application tests and the expanded browser checks passing. Real shop acceptance and permanent hosting remain pending.
+**October 26 assessment:** [Correctness findings, feature simplification and UI development plan](docs/PROJECT_ASSESSMENT_2026-10-26.md). The identified corrections are implemented in preview.2; preview.3 adds guided intake, job tabs and shared repair/counter accounts. Automated and browser results are recorded in the milestone. Real shop acceptance and permanent hosting remain pending.
 
 One Windows POS/server with a shared SQLite database, desktop order receiver, owner and technician web clients, and native iOS source for AZ Jet Ski, Boats & Powersports.
 
@@ -54,7 +54,7 @@ node scripts/restore-all.mjs PATH_TO_BACKUP
 
 Use the backup directory containing `manifest.json` and `ownertracker.sqlite`. New backups include SHA-256 checksums for the database and complete photo set. Restore verifies them before making changes, replaces the photo set instead of mixing old files, and retains the previous database/photos in `data/ownertracker-before-restore-UUID` (beside a custom database path if configured). SQLite sidecars block restoration; stop both processes and do not manually delete a live database's sidecars. Original checksum-free V11 backups require the explicit `--allow-legacy` flag after checking their origin. Restart and verify customers, vehicles, work orders and photos. Protect `.env` separately; database/photo backups do not include credentials. Checksums detect corruption; store encrypted offsite copies for disaster recovery.
 
-Optional Docker: generate `Windows-Server/.env` with setup, then run `docker compose -f Windows-Server/deploy/docker-compose.yml up --build -d`. Compose publishes to localhost and persists `Windows-Server/data`; it starts the server only. The desktop agent can run separately. Docker execution has not been certified by this assembly.
+For the new permanent shop server, follow [SERVER_DEPLOYMENT.md](docs/SERVER_DEPLOYMENT.md). Its separate Compose configuration uses private generated credentials, persistent volumes, an unprivileged Node 22 application and Caddy HTTPS. A hosting account and domain are required; the review site is temporary. The earlier `deploy/docker-compose.yml` remains a local-only development alternative. The Windows desktop agent runs separately when needed.
 
 The Go launcher source is `Windows-Server/windows/OwnerTrackerDesktop.go`. The rebuilt executable checks the Node version and private configuration, prevents duplicate startup, waits for server readiness, and stops both child processes on normal Ctrl+C shutdown. See [launcher instructions](Windows-Server/windows/README.md), including recovery after an interrupted shutdown. Windows hardware launch acceptance is still required. Native owner/tech iOS source lives under `Windows-Server/ios` with an XcodeGen `project.yml` (iOS 17+, Swift 5.9). Building/signing requires macOS, Xcode and an Apple developer configuration; signed apps are not included.
 

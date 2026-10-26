@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+# Private Linux server bootstrap, owner login, and local backup exports.
+/Windows-Server/.server/
 *.pem
 *.key
 

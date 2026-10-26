@@ -1,0 +1,67 @@
+name: ownertracker-shop
+services:
+  ownertracker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+    restart: unless-stopped
+    init: true
+    env_file: ../.server/.env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      NODE_ENV: production
+      OWNERTRACKER_DB: /app/data/ownertracker.sqlite
+      PUBLIC_BASE_URL: https://${SHOP_DOMAIN:?Run scripts/setup-server.mjs with the shop domain first}
+      TRUST_PROXY: 'true'
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - shop_data:/app/data
+      - shop_backups:/app/backups
+    expose:
+      - '8787'
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+  https:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      SHOP_DOMAIN: ${SHOP_DOMAIN:?Run scripts/setup-server.mjs with the shop domain first}
+      # Keep inherited proxy exclusions and route the private upstream locally.
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1},ownertracker
+      no_proxy: ${no_proxy:-localhost,127.0.0.1},ownertracker
+    ports:
+      - '80:80'
+      - '443:443'
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - tls_data:/data
+      - tls_config:/config
+    depends_on:
+      ownertracker:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+volumes:
+  shop_data:
+  shop_backups:
+  tls_data:
+  tls_config:

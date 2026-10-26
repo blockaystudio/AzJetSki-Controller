@@ -1,0 +1,18 @@
+{
+  "colors": {
+    "text": "rgb(241, 245, 250)",
+    "panel": "rgb(21, 31, 44)",
+    "muted": "rgb(178, 191, 208)",
+    "green": "rgb(121, 242, 141)",
+    "buttonText": "rgb(8, 34, 14)",
+    "focus": "#b3dcff"
+  },
+  "ratios": {
+    "body_on_panel": 15.17,
+    "muted_on_panel": 8.9,
+    "button_on_green": 11.96,
+    "focus_on_panel": 11.55,
+    "warning_on_panel": 11.52,
+    "error_on_panel": 8.01
+  }
+}

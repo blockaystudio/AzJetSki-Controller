@@ -172,7 +172,7 @@ export function receiveCustomerReturn(db,scope,id,user,input){
   return transaction(db,()=>{
     const prior=db.prepare('SELECT * FROM accounting_returns WHERE idempotency_key=?').get(key);
     if(prior){if(prior.request_fingerprint!==fingerprint)fail(409,'Idempotency key was used with different return details');return {...prior,duplicate:true};}
-    if(db.prepare('SELECT 1 FROM inventory_adjustments WHERE idempotency_key=?').get(key))fail(409,'Stock key already belongs to another recorded operation');
+    for(const table of ['inventory_adjustments','stock_operations','retail_supplier_receipts'])if(has(db,table)&&db.prepare(`SELECT 1 FROM ${table} WHERE idempotency_key=?`).get(key))fail(409,'Stock key already belongs to another recorded operation');
     const credit=db.prepare('SELECT * FROM accounting_credits WHERE id=? AND scope=? AND entity_id=?').get(creditId,scope,id);
     if(!credit)fail(409,'Select a credit note on this account');
     const sale=db.prepare("SELECT * FROM inventory_adjustments WHERE id=? AND reason='sold' AND quantity_delta<0 AND reference_type='invoice'").get(saleId);

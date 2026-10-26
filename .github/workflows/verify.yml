@@ -71,3 +71,19 @@ jobs:
           name: OwnerTracker-browser-review
           path: ${{ runner.temp }}/ownertracker-browser
           if-no-files-found: ignore
+
+  linux-server:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify disposable server startup, persistence and encrypted recovery
+        env:
+          OWNERTRACKER_NODE: node
+        run: python Windows-Server/test/server-deployment-smoke.py

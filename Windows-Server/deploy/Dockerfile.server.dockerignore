@@ -1,0 +1,9 @@
+# Send only application source to the builder; never include private setup/data.
+**
+!package.json
+!src/
+!src/**
+!public/
+!public/**
+!scripts/
+!scripts/**

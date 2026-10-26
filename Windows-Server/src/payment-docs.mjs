@@ -60,6 +60,38 @@ function addressRecord(db,w){
  return {service,billing};
 }
 function formatAddress(a){return a?[a.line1,a.line2,[a.city,a.state,a.postalCode].filter(Boolean).join(' ')].filter(Boolean):[];}
+// Render only the retained issue record. A historical invoice is distinct from
+// the live account receipt and must not recover or regenerate a customer token.
+function retainedInvoiceHtml(invoice,{shopName,nonce}){
+ const snapshot=JSON.parse(invoice.snapshot_json);
+ if(!snapshot||typeof snapshot!=='object'||Array.isArray(snapshot)||!Array.isArray(snapshot.items))throw Error('Invalid invoice snapshot');
+ const amount=(value,optional=false,signed=false)=>{
+  if(value===undefined||value===null){if(optional)return null;throw Error('Missing invoice amount');}
+  if(typeof value!=='number'||!Number.isSafeInteger(value)||(!signed&&value<0))throw Error('Invalid invoice amount');
+  return value;
+ };
+ const lineAmount=value=>{
+  if(typeof value!=='number'||!Number.isFinite(value)||value<0)throw Error('Invalid invoice line amount');
+  return amount(Math.round(value*100));
+ };
+ const total=amount(snapshot.estimateCents),tax=amount(snapshot.taxCents,true),issuedAmount=amount(invoice.amount_cents);
+ if(tax!==null&&tax>total)throw Error('Invalid invoice tax');
+ const rate=snapshot.taxRateBps;
+ if(rate!==undefined&&rate!==null&&(!Number.isSafeInteger(rate)||rate<0))throw Error('Invalid invoice tax rate');
+ const missing='Not retained in issued snapshot';
+ const row=(label,value)=>`<tr><th scope="row">${esc(label)}</th><td>${value===null?missing:esc(dollar(value))}</td></tr>`;
+ const address=value=>formatAddress(value).map(esc).join('<br>')||missing;
+ const items=snapshot.items.map(item=>{
+  if(!item||typeof item!=='object'||typeof item.qty!=='number'||!Number.isFinite(item.qty)||item.qty<=0)throw Error('Invalid invoice item');
+  return `<tr><td>${esc(item.description)}${item.item_ref?`<br><small>${esc(item.item_ref)}</small>`:''}</td><td>${esc(item.qty)}</td><td>${esc(dollar(lineAmount(item.rate)))}</td><td>${item.taxable===undefined||item.taxable===null?'Not retained':Number(item.taxable)?'Yes':'No'}</td><td>${esc(dollar(lineAmount(item.amount)))}</td></tr>`;
+ }).join('');
+ return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Issued invoice ${esc(invoice.number)}</title><style>body{font:16px system-ui,sans-serif;color:#172b38;background:#f4f7fa;margin:0;padding:24px}main{max-width:850px;margin:auto;background:white;padding:28px;border:1px solid #cbd5dd;border-radius:12px}h1{overflow-wrap:anywhere}button{font:inherit;padding:10px 18px;cursor:pointer}table{width:100%;border-collapse:collapse;margin:20px 0}th,td{text-align:left;vertical-align:top;padding:10px;border-bottom:1px solid #cbd5dd}td:last-child{text-align:right}.notice{padding:14px;border:2px solid #725116;background:#fff7df}.summary{max-width:600px;margin-left:auto}.summary th{width:70%}small{color:#40525e}@media(max-width:600px){body{padding:8px}main{padding:14px}th,td{padding:7px;font-size:14px}}@media print{body{background:white;padding:0}main{border:0;padding:0}button{display:none}}</style></head><body><main><button id="print" type="button">Print invoice</button><p>${esc(shopName)}</p><h1>${invoice.document_kind==='revised_invoice'?'Revised invoice':'Invoice'} ${esc(invoice.number)}</h1><p class="notice"><strong>Retained invoice snapshot — amounts and details at issue.</strong> This copy does not show the current account balance, record a payment, or create an additional charge.</p>
+${invoice.voided_at?`<p class="notice"><strong>Cancelled invoice.</strong> Cancelled ${esc(invoice.voided_at)}. Retained for history; do not use this document to request payment.</p>`:''}
+${invoice.superseded_by?`<p class="notice"><strong>Superseded invoice.</strong> Replaced by invoice #${esc(invoice.superseded_by)}. Retained for history; do not use this document to request payment.</p>`:''}
+${invoice.supersedes_invoice_id?`<p>This revised snapshot replaces invoice #${esc(invoice.supersedes_invoice_id)}.</p>`:''}
+<p>Issued ${esc(invoice.issued_at)}${invoice.work_order_revision!==null&&invoice.work_order_revision!==undefined?` · Work-order revision ${esc(invoice.work_order_revision)}`:''}</p><p><strong>Customer at issue:</strong> ${esc(invoice.recipient_name)}<br>${esc(invoice.recipient_email)}${invoice.recipient_phone?`<br>${esc(invoice.recipient_phone)}`:''}</p><p><strong>Work order at issue:</strong> ${esc(snapshot.refNumber??missing)}<br><strong>Unit at issue:</strong> ${esc(snapshot.unit??missing)}</p><p><strong>Billing address at issue</strong><br>${address(snapshot.addresses?.billing)}</p><p><strong>Service address at issue</strong><br>${address(snapshot.addresses?.service)}</p>
+<h2>Items at issue</h2><table><thead><tr><th>Item / SKU</th><th>Quantity</th><th>Unit price</th><th>Taxable</th><th>Amount</th></tr></thead><tbody>${items||'<tr><td colspan="5">No item details retained.</td></tr>'}</tbody></table><table class="summary"><tbody>${row('Subtotal at issue',tax===null?null:total-tax)}${row(`Sales tax at issue${rate===undefined||rate===null?'':` (${(rate/100).toFixed(2)}%)`}`,tax)}${row('Work-order total at issue',total)}${row('Retained credits at issue',amount(snapshot.creditCents,true))}${row('Adjusted account charge at issue',amount(snapshot.effectiveCents,true))}${row('Net confirmed payments at issue',amount(snapshot.paidCents,true,true))}${row('Account balance at issue',amount(snapshot.balanceCents,true))}${row('Invoice amount at issue',issuedAmount)}</tbody></table><p><small>This is a copy of the issued document. Check the current account receipt for later payments, credits, refunds and balance. Invoice history does not authorize vehicle release.</small></p></main><script nonce="${nonce}">document.getElementById('print').addEventListener('click',()=>window.print());</script></body></html>`;
+}
 function packetLines(w,details){return [
  'AZ JET SKI, BOATS & POWERSPORTS - REPAIR AUTHORIZATION',
  'Work Order: '+(w.ref_number||w.id),'Customer: '+t(w.customer_name),'Email: '+t(w.email),
@@ -94,6 +126,17 @@ export function checkoutRoutes({db,currentUser,json,readBody,publicBaseUrl,shopN
  return async function route(req,res,p,url){
  try{
   if(p==='/api/billing/integration-status'&&req.method==='GET'){if(!owner(req))return error(res,403,'Staff permission required');return send(res,200,{dejavoo:hppConfig(),docusign:docConfig(),basePublicHttps:!!safeUrl(base)});}
+  const retainedDocument=p.match(/^\/api\/billing\/invoices\/(\d+)\/document$/);
+  if(retainedDocument){
+   if(!owner(req))return error(res,403,'Staff permission required');
+   if(req.method!=='GET')return error(res,405,'Invoice documents support GET only');
+   const id=Number(retainedDocument[1]);if(!Number.isSafeInteger(id)||id<1)return error(res,404,'Invoice not found');
+   const invoice=db.prepare('SELECT id,number,amount_cents,recipient_name,recipient_email,recipient_phone,issued_at,voided_at,document_kind,work_order_revision,supersedes_invoice_id,superseded_by,snapshot_json FROM ot_invoices WHERE id=?').get(id);
+   if(!invoice)return error(res,404,'Invoice not found');
+   const nonce=crypto.randomBytes(18).toString('base64');let html;
+   try{html=retainedInvoiceHtml(invoice,{shopName,nonce});}catch{return error(res,409,'Retained invoice snapshot is unavailable or invalid; review the original invoice');}
+   res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'private, no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','x-frame-options':'DENY','cross-origin-resource-policy':'same-origin','content-security-policy':`default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`});res.end(html);return true;
+  }
   const inv=p.match(/^\/api\/pos\/work-orders\/(\d+)\/invoice(?:s)?$/);
   if(inv&&req.method==='GET'){if(!owner(req))return error(res,403,'Staff permission required');const rows=db.prepare('SELECT id,number,amount_cents,recipient_name,recipient_email,issued_at,valid_until,voided_at,document_kind,work_order_revision,supersedes_invoice_id,superseded_by FROM ot_invoices WHERE work_order_id=? ORDER BY id DESC').all(Number(inv[1]));return send(res,200,{invoices:rows});}
   if(inv&&req.method==='POST'){

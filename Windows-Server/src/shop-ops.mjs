@@ -1,6 +1,7 @@
 import {makePurchaseTarget} from '../public/purchase-target.js';
 import {assertPurchaseAuthorized,receiveStock} from './shop-management.mjs';
-import {installInventoryMovements,inventoryInvoiceLines,recordInventoryAdjustment,stockRequestKey} from './inventory-movements.mjs';
+import {installInventoryMovements,inventoryInvoiceLines,recordInventoryAdjustment,stockRequestKey,retailLineFulfillment,syncRetailFulfillment} from './inventory-movements.mjs';
+import {receiveRetailParts} from './retail-fulfillment.mjs';
 import {requireEditRevision} from './edit-revisions.mjs';
 // Owner Tracker V11: physical custody, counter queues, scheduling, and invoiced retail special orders.
 // All purchase submissions remain manual connector handoffs. Never represent a queued command as a completed purchase.
@@ -99,7 +100,17 @@ export function installShopOps(db){
   installGoogleCalendar(db);
 }
 const receipt=(db,id)=>db.prepare(`SELECT r.*,c.name customer_name,c.phone,c.email FROM retail_special_orders r JOIN customers c ON c.id=r.customer_id WHERE r.id=?`).get(id);
-const lines=(db,id)=>db.prepare(`SELECT l.*,v.name vendor_name,v.code vendor_code FROM retail_special_lines l LEFT JOIN vendors v ON v.id=l.vendor_id WHERE l.retail_order_id=? ORDER BY l.id`).all(id);
+const lines=(db,id)=>{const order=db.prepare('SELECT * FROM retail_special_orders WHERE id=?').get(id);return db.prepare(`SELECT l.*,v.name vendor_name,v.code vendor_code FROM retail_special_lines l LEFT JOIN vendors v ON v.id=l.vendor_id WHERE l.retail_order_id=? ORDER BY l.id`).all(id).map(line=>({...line,fulfillment:retailLineFulfillment(db,order,line)}));};
+function retailPurchasable(db,line){
+  const order=receipt(db,line.retail_order_id),state=retailLineFulfillment(db,order,line);
+  if(!order?.invoice_issued_at||order.invoice_voided_at||order.status==='cancelled'||state.requiresReconciliation||state.fulfilledQuantity!==0||state.remainingQuantity<=0)return false;
+  for(const command of db.prepare('SELECT snapshot_json FROM retail_purchase_commands').all()){
+    let snapshot;try{snapshot=JSON.parse(command.snapshot_json);}catch{return false;}
+    if(!Array.isArray(snapshot?.lines))return false;
+    if(snapshot.lines?.some(item=>Number(item.lineId)===line.id))return false;
+  }
+  return true;
+}
 export function retailTotals(items,bps){let subtotal=0,taxable=0;for(const l of items){const ext=l.quantity*l.unit_price_cents;subtotal+=ext;if(l.taxable)taxable+=ext}const tax=Math.round(taxable*bps/10000);return {subtotal_cents:subtotal,tax_cents:tax,total_cents:subtotal+tax};}
 function recalc(db,id){const r=receipt(db,id);const t=retailTotals(lines(db,id),r.tax_bps);db.prepare('UPDATE retail_special_orders SET subtotal_cents=?,tax_cents=?,total_cents=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(t.subtotal_cents,t.tax_cents,t.total_cents,id);return t;}
 function retailPaymentTotals(db,id){const r=receipt(db,id);if(!r)throw Error('Retail order not found');const t=accountBalance(db,'retail',id,r.total_cents);return {paid:t.netPaidCents,pending:t.pendingCents,due:t.dueCents,total:t.effectiveTotalCents,originalTotal:t.rawTotalCents,credits:t.creditCents,refundDue:t.refundDueCents};}
@@ -114,7 +125,7 @@ function queues(db){
   const pickup=rows.filter(r=>r.stage==='Ready'&&Number(r.balance||0)<=0.005&&Number(r.refundDue||0)<=0.005);
   const retail=db.prepare(`SELECT r.id,r.invoice_number,r.status,r.total_cents,c.name customer_name,c.phone
      FROM retail_special_orders r JOIN customers c ON c.id=r.customer_id WHERE r.invoice_issued_at IS NOT NULL ORDER BY r.id DESC LIMIT 100`).all();
-  const retailReady=retail.filter(r=>r.status==='ready_for_pickup').map(r=>({...r,payment:retailPaymentTotals(db,r.id)}));
+  const retailReady=retail.filter(r=>r.status==='ready_for_pickup'&&lines(db,r.id).every(line=>!line.fulfillment.requiresReconciliation&&line.fulfillment.remainingQuantity===0)).map(r=>({...r,payment:retailPaymentTotals(db,r.id)}));
   return {inLot:rows,paymentPending:pending,readyForPickup:pickup,
     retailReadyForPickup:retailReady.filter(r=>r.payment.due===0&&r.payment.refundDue===0),retailPaymentPending:retailReady.filter(r=>r.payment.due>0||r.payment.refundDue>0),checkedInCustomers:[...new Map(rows.map(r=>[r.customer_id,{id:r.customer_id,name:r.customer_name,phone:r.phone,vehicleCount:rows.filter(x=>x.customer_id===r.customer_id).length}])).values()]};
 }
@@ -268,6 +279,7 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
       if(!purchasing())return deny('retail_purchase_review');const id=Number(verify[1]),lid=Number(verify[2]),d=await b(),r=receipt(db,id),l=lines(db,id).find(x=>x.id===lid);
       if(!r||!l)return respond(404,{error:'Order line not found'});
       if(!r.invoice_issued_at)return respond(409,{error:'Issue a customer invoice before purchasing'});
+      if(!['needs_source','verified'].includes(l.status)||!retailPurchasable(db,l))return respond(409,{error:'Only an unfulfilled, active invoice line awaiting initial supplier verification can enter purchasing'});
       if(!l.vendor_id||!l.vendor_sku||l.unit_cost_cents<=0||!d.available||!d.fitment)return respond(409,{error:'Supplier, exact SKU, cost, availability and fitment are required'});
       if(l.vendor_sku.startsWith('DEMO-'))return respond(409,{error:'Demo SKUs cannot be ordered'});
       requireEditRevision(db,req,p,d);
@@ -290,20 +302,31 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
       if(!staff())return deny('retail_payment');
       return respond(200,voidPayment(db,'retail',Number(retailVoid[1]),u,await b(),id=>retailPaymentTotals(db,id)));
     }
+    const receive=p.match(/^\/api\/shop\/retail-orders\/(\d+)\/lines\/(\d+)\/receive$/);
+    if(receive&&req.method==='POST'){
+      if(!purchasing())return deny('retail_receiving');
+      const result=receiveRetailParts(db,u,Number(receive[1]),Number(receive[2]),await b());
+      return respond(result.duplicate?200:201,result);
+    }
     const fulfill=p.match(/^\/api\/shop\/retail-orders\/(\d+)\/lines\/(\d+)\/status$/);
     if(fulfill&&req.method==='POST'){
       if(!purchasing())return deny('retail_fulfillment');const id=Number(fulfill[1]),lid=Number(fulfill[2]),d=await b(),r=receipt(db,id),l=lines(db,id).find(x=>x.id===lid);
       if(!r||!l)return respond(404,{error:'Part line not found'});
-      const next=str(d.status,40),allowed={queued:['ordered','backordered','cancelled'],ordered:['backordered','shipped','received'],backordered:['ordered','cancelled'],shipped:['received'],received:['picked_up']};
+      const next=str(d.status,40),allowed={queued:['ordered','backordered','cancelled'],ordered:['backordered','shipped'],backordered:['ordered','cancelled'],shipped:[],partially_received:['backordered','shipped'],received:['picked_up']};
+      if(next==='received')return respond(409,{error:'A status label cannot receive parts. Use the line /receive endpoint with physical quantity, exact SKU, packing/allocation reference and a stable idempotencyKey.'});
+      if(!r.invoice_issued_at||r.invoice_voided_at||r.status==='cancelled')return respond(409,{error:'An active issued retail invoice is required for fulfillment'});
       if(!allowed[l.status]?.includes(next))return respond(409,{error:`Cannot change ${l.status} to ${next}`});
-      if(['ordered','shipped','received'].includes(next)&&!str(d.supplierReference))return respond(409,{error:'Supplier order or receiving confirmation required'});
+      if(['ordered','shipped'].includes(next)&&!str(d.supplierReference))return respond(409,{error:'Supplier order confirmation required'});
+      if(next==='picked_up'&&(l.fulfillment.requiresReconciliation||l.fulfillment.remainingQuantity!==0))return respond(409,{error:l.fulfillment.reconciliationReason||'Receive or allocate the full retained invoice quantity before pickup; historical status-only fulfillment requires reconciliation'});
       if(next==='picked_up'&&(retailPaymentTotals(db,id).due>0||retailPaymentTotals(db,id).refundDue>0))return respond(409,{error:'Cannot release customer parts with an unpaid balance'});
-      requireEditRevision(db,req,p,d);
-      db.prepare("UPDATE retail_special_lines SET status=?,eta_text=COALESCE(NULLIF(?,''),eta_text) WHERE id=?").run(next,str(d.eta,180),lid);
-      const statuses=lines(db,id).map(x=>x.status);
-      if(statuses.every(x=>x==='received'||x==='picked_up'))db.prepare("UPDATE retail_special_orders SET status='ready_for_pickup',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id);
-      if(statuses.every(x=>x==='picked_up'))db.prepare("UPDATE retail_special_orders SET status='picked_up',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id);
-      audit(db,u,'Retail line fulfilled',{id,lid,next,supplierReference:d.supplierReference});return respond(200,{ok:true});
+      if(next==='cancelled'&&l.fulfillment.fulfilledQuantity>0)return respond(409,{error:'Received or allocated customer parts require an invoice credit and an audited return'});
+      db.exec('BEGIN IMMEDIATE');try{
+        requireEditRevision(db,req,p,d);
+        db.prepare("UPDATE retail_special_lines SET status=?,eta_text=COALESCE(NULLIF(?,''),eta_text) WHERE id=?").run(next,str(d.eta,180),lid);
+        syncRetailFulfillment(db,id);
+        audit(db,u,'Retail line fulfilled',{id,lid,next,supplierReference:d.supplierReference});db.exec('COMMIT');
+      }catch(error){db.exec('ROLLBACK');throw error;}
+      return respond(200,{ok:true});
     }
     if(p==='/api/shop/retail-carts'&&req.method==='GET'){
       if(!u)return deny();const v=db.prepare('SELECT id,name,code,order_threshold FROM vendors WHERE enabled=1 ORDER BY name').all();
@@ -311,7 +334,7 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
         FROM retail_special_lines l JOIN retail_special_orders r ON r.id=l.retail_order_id
         JOIN customers c ON c.id=r.customer_id JOIN vendors v ON v.id=l.vendor_id
         WHERE r.invoice_issued_at IS NOT NULL AND l.status='verified' ORDER BY l.id`).all();
-      return respond(200,{carts:v.map(vendor=>{const items=all.filter(l=>l.vendor_id===vendor.id),total=items.reduce((n,l)=>n+l.quantity*l.unit_cost_cents,0);return {...vendor,items,total_cents:total,eligible:items.length>0&&total>=Math.round(vendor.order_threshold*100),remaining_cents:Math.max(0,Math.round(vendor.order_threshold*100)-total)};})});
+      return respond(200,{carts:v.map(vendor=>{const items=all.filter(l=>l.vendor_id===vendor.id&&retailPurchasable(db,l)),total=items.reduce((n,l)=>n+l.quantity*l.unit_cost_cents,0);return {...vendor,items,total_cents:total,eligible:items.length>0&&total>=Math.round(vendor.order_threshold*100),remaining_cents:Math.max(0,Math.round(vendor.order_threshold*100)-total)};})});
     }
     const order=p.match(/^\/api\/shop\/retail-carts\/(\d+)\/queue$/);
     if(order&&req.method==='POST'){
@@ -319,6 +342,7 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
       if(!vendor)return respond(404,{error:'Vendor not found'});
       const rs=db.prepare(`SELECT l.*,r.invoice_number FROM retail_special_lines l JOIN retail_special_orders r ON r.id=l.retail_order_id WHERE l.vendor_id=? AND l.status='verified' AND r.invoice_issued_at IS NOT NULL ORDER BY l.id`).all(vendorId);
       if(!rs.length)return respond(409,{error:'No verified invoice-backed parts in cart'});
+      if(rs.some(line=>!retailPurchasable(db,line)))return respond(409,{error:'A cart line was already ordered, received, allocated or cancelled; reconcile it before another supplier purchase'});
       const total=rs.reduce((x,l)=>x+l.unit_cost_cents*l.quantity,0);
       if(total<Math.round(Number(vendor.order_threshold)*100))return respond(409,{error:'Cart is below supplier minimum'});
       if(d.confirmText!==`ORDER ${vendor.code}`||!Array.isArray(d.lines)||d.lines.length!==rs.length)return respond(409,{error:'Review each line and type the required confirmation'});

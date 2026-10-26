@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import crypto from 'node:crypto';
 import {prepareRevisionRequest,rememberEditRevisions,editConflictMessage} from '../public/edit-revisions-ui.js';
+import {createRequestAttempts,repairInvoiceDetails} from '../public/invoice-ui.js';
 
 const source=fs.readFileSync(new URL('../public/billing.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
@@ -44,7 +45,7 @@ function fixture({intercept=async()=>null,mount=async()=>{}}={}){
     else if(url.endsWith('/docusign'))result={packets:[]};
     return {ok:true,json:async()=>result};
   };
-  const context=vm.createContext({document:{querySelector:selector=>nodes.get(selector)||null,createElement:tag=>new Element('',tag.toUpperCase())},location:{search:''},URLSearchParams,fetch,crypto,FormData:FakeFormData,prepareRevisionRequest,rememberEditRevisions,editConflictMessage,financePanel:()=>'<p>Payment history</p>',bindFinancePanel(){},mountAuthorizations:mount,confirm:()=>true,alert(){},navigator:{clipboard:{writeText:async()=>{}}},prompt(){},console});
+  const context=vm.createContext({document:{querySelector:selector=>nodes.get(selector)||null,createElement:tag=>new Element('',tag.toUpperCase())},location:{search:''},URLSearchParams,fetch,crypto,FormData:FakeFormData,prepareRevisionRequest,rememberEditRevisions,editConflictMessage,createRequestAttempts,repairInvoiceDetails,financePanel:()=>'<p>Payment history</p>',bindFinancePanel(){},mountAuthorizations:mount,confirm:()=>true,alert(){},navigator:{clipboard:{writeText:async()=>{}}},prompt(){},console});
   vm.runInContext(source,context);
   return {nodes,requests,async ready(){for(let i=0;i<5;i++)await tick();},select(id){nodes.get('#jobs').value=String(id);return nodes.get('#jobs').onchange();},submit(id){const form=nodes.get('#'+id);return form.onsubmit({preventDefault(){},currentTarget:form});}};
 }

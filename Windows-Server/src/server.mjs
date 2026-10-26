@@ -286,7 +286,7 @@ async function refreshOrderStatuses() {
 
 function serveStatic(req,res,pathname) {
   const rel=pathname==='/'?'index.html':pathname.slice(1),target=path.resolve(publicDir,rel); if(!target.startsWith(publicDir)||!fs.existsSync(target)||fs.statSync(target).isDirectory())return false;
-  const ext=path.extname(target),types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml'};res.writeHead(200,{'content-type':types[ext]||'application/octet-stream','cache-control':ext==='.html'?'no-store':'public,max-age=3600','x-content-type-options':'nosniff'});fs.createReadStream(target).pipe(res);return true;
+  const ext=path.extname(target),types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml'};res.writeHead(200,{'content-type':types[ext]||'application/octet-stream','cache-control':ext==='.html'?'no-store':['.js','.css'].includes(ext)?'no-cache':'public,max-age=3600','x-content-type-options':'nosniff'});fs.createReadStream(target).pipe(res);return true;
 }
 function portalHtml(token,p) {
   const updates=db.prepare(`SELECT * FROM work_order_updates WHERE work_order_id=? AND customer_visible=1 ORDER BY id DESC`).all(p.work_order_id); const media=db.prepare(`SELECT id,scope,caption,created_at FROM media WHERE work_order_id=? AND customer_visible=1 ORDER BY id DESC`).all(p.work_order_id); const unit=p.unit_label||[p.year,p.make,p.model].filter(Boolean).join(' ');

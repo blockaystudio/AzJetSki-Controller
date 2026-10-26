@@ -1,12 +1,12 @@
 import {mountAuthorizations} from './authorizations-ui.js';
 import {rememberEditRevisions,prepareRevisionRequest,editConflictMessage} from './edit-revisions-ui.js';
 import {financePanel,bindFinancePanel} from './finance-ui.js';
+import {createRequestAttempts,repairInvoiceDetails} from './invoice-ui.js';
 const $=s=>document.querySelector(s);
 const money=n=>Number(n||0).toLocaleString('en-US',{style:'currency',currency:'USD'});
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const requestKey=()=>globalThis.crypto?.randomUUID?.()||`ot-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 let job=null,invoices=[],loadEpoch=0,refundDue=false;
-const attempts=new Map();
+const attempts=createRequestAttempts();
 async function api(path,method='GET',body,context={}){
   const options=prepareRevisionRequest(path,{method,credentials:'same-origin',headers:{'content-type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)},context);
   const r=await fetch(path,options),j=await r.json().catch(()=>({}));
@@ -83,11 +83,7 @@ async function load({preserveResults=false}={}){
     $('#jobinfo').closest('section').after(authorizations);controls();
   }catch(error){if(stillSelected()){clearSelection(preserveResults);show('#jobinfo',error.message);} }
 }
-function retryPayload(action,path,payload){
-  const fingerprint=JSON.stringify({path,payload});let attempt=attempts.get(action);
-  if(!attempt||attempt.fingerprint!==fingerprint){attempt={fingerprint,key:requestKey()};attempts.set(action,attempt);}
-  return {...payload,idempotencyKey:attempt.key};
-}
+function retryPayload(action,path,payload){return attempts.payload(action,path,payload);}
 async function action(form,result,operation){
   if(form.dataset.busy)return;
   let context;
@@ -99,8 +95,8 @@ $('#jobs').onchange=()=>load();$('#refresh').onclick=()=>load();
 $('#invoiceForm').onsubmit=event=>{
   event.preventDefault();return action(event.currentTarget||$('#invoiceForm'),'#invoiceResult',async context=>{
     const path=`/api/pos/work-orders/${context.id}/invoices`;
-    const payload=retryPayload('invoice',path,{email:$('#recipient').value,sendEmail:$('#sendEmail').checked,expectedRevision:context.record.revision,documentKind:invoices.length?'revised_invoice':'invoice',...(invoices.length?{supersedesInvoiceId:invoices[0].id}:{})});
-    const d=await api(path,'POST',payload,{record:context.record});attempts.delete('invoice');if(!current(context))return;
+    const payload=retryPayload('invoice',path,repairInvoiceDetails(context.record,invoices,{email:$('#recipient').value,sendEmail:$('#sendEmail').checked}));
+    const d=await api(path,'POST',payload,{record:context.record});attempts.clear('invoice');if(!current(context))return;
     $('#invoiceResult').innerHTML=`<b>${esc(d.number)}</b> — ${money(d.amount)}<br>Delivery: ${esc(d.deliveryStatus)}<br><a href="${esc(d.link)}" target="_blank" rel="noopener noreferrer">Open Customer Invoice</a><p><button class="btn" id="copyLink">Copy Invoice Link</button> <a class="btn" id="mailto" href="#">Email Using Mail App</a></p>`;
     $('#copyLink').onclick=()=>navigator.clipboard.writeText(d.link).catch(()=>prompt('Copy link:',d.link));$('#mailto').href=`mailto:${encodeURIComponent(d.customerEmail)}?subject=${encodeURIComponent(d.subject)}&body=${encodeURIComponent(d.message)}`;
     await load({preserveResults:true});
@@ -111,7 +107,7 @@ $('#payForm').onsubmit=event=>{
     if(refundDue)throw Error('Resolve the refund owed before recording another payment.');
     const form=$('#payForm'),fields=Object.fromEntries(new FormData(form)),path=`/api/pos/work-orders/${context.id}/payments`;
     const payload=retryPayload('payment',path,{method:fields.method,amount:fields.amount,reference:fields.reference||'',verified:form.elements.verified.checked,status:fields.method==='zelle'&&!form.elements.verified.checked?'pending':'confirmed'});
-    await api(path,'POST',payload);attempts.delete('payment');if(current(context))await load();
+    await api(path,'POST',payload);attempts.clear('payment');if(current(context))await load();
   });
 };
 $('#p1Form').onsubmit=event=>{
@@ -119,7 +115,7 @@ $('#p1Form').onsubmit=event=>{
     const fields=Object.fromEntries(new FormData($('#p1Form'))),id=Number($('#p1Invoice').value);
     if(!invoices.some(x=>x.id===id&&!x.voided_at&&!x.superseded_by))throw Error('Issue a current invoice first.');
     const path=`/api/billing/invoices/${id}/payment-requests`,payload=retryPayload('p1',path,fields);
-    const d=await api(path,'POST',{...fields,requestKey:payload.idempotencyKey});attempts.delete('p1');
+    const d=await api(path,'POST',{...fields,requestKey:payload.idempotencyKey});attempts.clear('p1');
     if(current(context))show('#p1Result',`Request #${d.id??d.request?.id}: ${d.status??d.request?.status}. ${d.notice||'Prepared for merchant review; no charge processed.'}`);
   });
 };
