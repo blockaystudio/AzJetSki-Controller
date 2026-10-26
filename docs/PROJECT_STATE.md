@@ -7,7 +7,7 @@ Updated 2026-10-26. Read this first; load only the relevant source or handoff.
 - One AZ Jet Ski shop; repairs and counter parts sales have equal priority.
 - Source: https://github.com/blockaystudio/AzJetSki-Controller (main).
 - Preview.2 completed assessment A01–A15 fixes and contrast/navigation foundation; see `CORRECTIONS_2026-10-26.md`.
-- Preview.3 implements guided intake, six job tabs, shared repair/retail accounts, retained invoice documents, quantity-based special-order receiving, scoped refunds/returns and daily-close date guards. Current step: publish verified changes, refresh review and record CI.
+- Preview.3 implements guided intake, six job tabs, shared repair/retail accounts, retained invoice documents, quantity-based special-order receiving, scoped refunds/returns and daily-close date guards. Milestone published and private review refreshed. Next: select/provision the permanent host and run shop acceptance.
 - Owner explicitly needs a NEW server. Linux package is tested; hosting account and owned domain remain unanswered prerequisites. No cloud host, DNS or public certificate provisioned.
 - Preserve customer isolation, approvals, financial/stock audit history and backups. Test only fictional disposable records. Automated charging/dealer checkout and signed native iOS remain optional/deferred.
 
@@ -29,10 +29,11 @@ Updated 2026-10-26. Read this first; load only the relevant source or handoff.
 ## Runtime and upgrade
 
 - Review: https://azjetski-ownertracker-review.wholeclock.chatgpt.site
-- Runtime: `/workspace/ownertracker-review-runtime/Windows-Server`; preserve .env/data/photos/settings. Still preview.2 until refresh completes. Pre-preview.3 backup: `backups/ownertracker-FsNx49`.
+- Runtime: `/workspace/ownertracker-review-runtime/Windows-Server`; preserve .env/data/photos/settings. Updated to preview.3 and verified over HTTPS; all 74 source files match the published app. Twelve existing business table counts are unchanged. Pre-update backup: `backups/ownertracker-CVxAnt`.
 - Bridge instructions and registered Site ID: `review-hosting/README.md`, `review-hosting/.openai/hosting.json`. Credentials stay in session/runtime storage. Review requires the workspace server.
 - Legacy status-only fulfillment and physical returns before pickup require reconciliation; do not invent receipts or repeat supplier purchases. Split packing-document/SKU allocations require distinct documented references. Generic stock receiving does not automatically fulfill special orders.
-- Previous published checkpoint: `66cb969`; preview.2 CI runs `40396656844` (app/browser/launcher) and `40396336668` (Windows install/rollback). Replace with preview.3 publication evidence.
+- Published application commit: `0d3dbad268dc99e3535f02ce84d3164dd9a11c5a`. [App/browser/Linux recovery/launcher CI](https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40402146084) and [Windows install/rollback](https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40402146116) passed. Later documentation-only commits do not change this application.
+- Portable outputs: `/workspace/OwnerTracker-preview3-release` (106 verified files), `/workspace/OwnerTracker-V11-preview3.zip`, and `/workspace/OwnerTracker-V11-preview3.git.bundle`. Source/runtime remain separate.
 - Remaining shop gates: host/account/domain, staff accounts, reconciled starting data, offsite restore, actual Windows/phone/peripherals and selected live providers.
 
 ## Durable storage

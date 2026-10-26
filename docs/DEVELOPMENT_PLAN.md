@@ -15,7 +15,7 @@ Updated 2026-10-26. Scope: one AZ Jet Ski shop, with equal priority for repair s
 
 ## Delivery order
 
-1. Publish the verified preview.3 corrections to GitHub and the private review site; run repository CI against the published commit.
+1. Completed: preview.3 corrections published to GitHub and the private review site. Application, browser, Linux recovery, launcher and Windows install/rollback CI passed for `0d3dbad`.
 2. Use the tested [server deployment guide](SERVER_DEPLOYMENT.md) to provision the selected host after account/domain details are available. Verify actual public HTTPS, external health, restart persistence and offsite restoration.
 3. Run a fictional shop walkthrough on the actual devices, then a controlled real-record pilot with reconciled payments, stock, approvals and pickup. Expand only after those records balance.
 
