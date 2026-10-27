@@ -4,6 +4,8 @@ Updated 2026-10-26. Read this first; load only the relevant source or handoff.
 
 Current follow-up (application b7119ed): preview.4 adds desktop Sales/Calendar entry, scheduling customer creation/search, and private Google OAuth configuration helper. Owner explicitly asked to WAIT for the QuickBooks export, which they will add to Drive. Shared recovery chat is now read; its schema and archive features are incorporated in `/legacy.html` with a staff-only read-only adapter. Actual ZIP and active customer merging remain pending; no real records have been merged. Google OAuth client is not yet created; connection is not active. See `SHOP_DESKTOP_ROLLOUT.md` and `handoffs/desktop_calendar_legacy.md`. Local checks: 277 tests, 104 syntax checks and expanded browser journeys passed. Verified 114-file Windows package: `/workspace/OwnerTracker-Desktop-preview4.zip`; launcher rebuilt and review refreshed.
 
+Preview.5 adds a transactional legacy-customer importer with original-ID links, collision detection and replay protection, plus customer-history links and counter-sale directory search. Private migration completion records stay outside GitHub. OAuth setup still requires the downloaded client JSON and owner consent. Tests:280/subtests,108syntax and isolated browser journeys passed.
+
 ## Goal and decisions
 
 - One AZ Jet Ski shop; repairs and counter parts sales have equal priority.

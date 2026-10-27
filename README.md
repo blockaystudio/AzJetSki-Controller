@@ -1,6 +1,6 @@
 # OwnerTracker V11
 
-**Current: single-shop review release 11.1.0-preview.4.** [Open the private review](https://azjetski-ownertracker-review.wholeclock.chatgpt.site) · [Job workspace and server preparation](docs/WORKSPACE_MILESTONE_2026-10-26.md) · [Compact project checkpoint](docs/PROJECT_STATE.md). The review uses fictional records and requires its managed runtime to remain active.
+**Current: single-shop review release 11.1.0-preview.5.** [Open the private review](https://azjetski-ownertracker-review.wholeclock.chatgpt.site) · [Job workspace and server preparation](docs/WORKSPACE_MILESTONE_2026-10-26.md) · [Compact project checkpoint](docs/PROJECT_STATE.md). The review uses fictional records and requires its managed runtime to remain active.
 
 **October 26 assessment:** [Correctness findings, feature simplification and UI development plan](docs/PROJECT_ASSESSMENT_2026-10-26.md). The identified corrections are implemented in preview.2; preview.3 adds guided intake, job tabs and shared repair/counter accounts. Automated and browser results are recorded in the milestone. Real shop acceptance and permanent hosting remain pending.
 

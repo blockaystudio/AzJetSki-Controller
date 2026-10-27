@@ -143,7 +143,7 @@ function updateLineTotals(db,id,actor){
   db.prepare(`UPDATE work_orders SET parts_total=(SELECT COALESCE(SUM(ROUND(amount*100)),0)/100.0 FROM work_order_lines WHERE work_order_id=? AND line_type='part'),labor_total=(SELECT COALESCE(SUM(ROUND(amount*100)),0)/100.0 FROM work_order_lines WHERE work_order_id=? AND line_type='labor'),updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(id,id,id);
   applyOrderTax(db,id,actor);
 }
-function fullCustomer(db,id){const c=db.prepare('SELECT * FROM customers WHERE id=?').get(id);if(!c)return null;c.vehicles=db.prepare('SELECT * FROM vehicles WHERE customer_id=? AND archived=0 ORDER BY id DESC').all(id);c.workOrders=db.prepare('SELECT id,ref_number,stage,estimate_total,vehicle_id,created_at FROM work_orders WHERE customer_id=? ORDER BY id DESC').all(id);return c;}
+function fullCustomer(db,id){const c=db.prepare('SELECT * FROM customers WHERE id=?').get(id);if(!c)return null;if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='legacy_customer_links'").get())c.legacy_customer_id=db.prepare('SELECT external_id FROM legacy_customer_links WHERE customer_id=?').get(id)?.external_id||null;c.vehicles=db.prepare('SELECT * FROM vehicles WHERE customer_id=? AND archived=0 ORDER BY id DESC').all(id);c.workOrders=db.prepare('SELECT id,ref_number,stage,estimate_total,vehicle_id,created_at FROM work_orders WHERE customer_id=? ORDER BY id DESC').all(id);return c;}
 
 export function posRoutes({db, currentUser, json, readBody, requireBridge, bridgeToken, auditLog}){
   extendDatabase(db);
