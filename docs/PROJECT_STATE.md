@@ -24,6 +24,13 @@ source. Platform conclusions are recorded in the branch's exact-SHA GitHub
 checks. The existing preview5 ZIP still matches its original `f3d29ff` source;
 it has not been replaced by this investigation.
 
+Application correction `745e867` passed all four jobs in run `40565444211`.
+Reading back its Windows artifact exposed a packaging gap: artifact upload omitted
+manifest-required `.env.example`, while installer tests ran before upload. The
+workflow now includes hidden files only from the allowlisted release and tests the
+freshly downloaded artifact. Do not install artifact `12761004344`; use the final
+branch's successful manifest/install/rollback readback and exact-source provenance.
+
 See [status](../status.md), [bounded handoff](handoffs/browser_failure_investigation.md)
 and [evidence](evidence/browser-investigation-2026-10-27.json).
 

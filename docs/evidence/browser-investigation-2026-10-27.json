@@ -213,5 +213,79 @@
     "result": "PASS",
     "review_transport_tests": 6,
     "review_transport_result": "PASS"
+  },
+  "first_correction_remote_verification": {
+    "sha": "745e86701ad78fdfce4b6111331ca341148bb596",
+    "ownertracker_run": 40565444211,
+    "ownertracker_jobs": {
+      "regressions": "success",
+      "browser-workflows": "success",
+      "linux-server": "success",
+      "windows-launcher": "success"
+    },
+    "pre_upload_windows_run": 40565444105,
+    "pre_upload_windows_result": "success",
+    "artifact_readback_result": "FAILED; manifest-required .env.example missing"
+  },
+  "windows_artifact_readback_defect": {
+    "run_id": 40565444105,
+    "artifact_id": 12761004344,
+    "artifact_url": "https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40565444105/artifacts/12761004344",
+    "manifest_commit": "745e86701ad78fdfce4b6111331ca341148bb596",
+    "version": "11.1.0-preview.5",
+    "zip_size": 5229084,
+    "zip_sha256": "57c72592ce0d9959504d9dc3c527d08734ead58e083b3d2ed59ae1472ac3ad70",
+    "manifest_file_count": 117,
+    "archive_entry_count": 117,
+    "missing_from_archive": [
+      ".env.example"
+    ],
+    "manifest_mismatches": [],
+    "source_content_mismatches": [],
+    "exact_source_matches": 4,
+    "crlf_only_matches": 112,
+    "critical_files": {
+      "public/shop-ops.js": {
+        "sha256_archive": "e26d9eef5d5c0cc11a2c58fe2c4c5eaee9f446395286c9fbc3be8a02d77f98d8",
+        "sha256_git": "fc4bf9d7ca035f72911ca8711200275278969f49ba3ae79361131055474d8720",
+        "exact_match": false,
+        "normalized_lf_match": true
+      },
+      "public/ui-foundation.css": {
+        "sha256_archive": "103f98848711eb21c031960046cba6ade0da21081b90c055a17c7ee91fdff40d",
+        "sha256_git": "96742ab0aa16e9703ef2916f93be7f1923e612c71d9af16e0842b1ea997c08cf",
+        "exact_match": false,
+        "normalized_lf_match": true
+      }
+    },
+    "verifier_exit_code": 1,
+    "verifier_error": "Release file inventory or checksum mismatch",
+    "classification": "Environment or CI configuration problem",
+    "correction": "Upload hidden files only from the allowlisted private-data-free release; download the uploaded artifact into a separate folder and verify its manifest and actual Windows install/rollback.",
+    "downloaded_package_verification": {
+      "command": "/tmp/ownertracker-tools/node22/node_modules/node/bin/node Windows-Server/scripts/package-release.mjs --verify /tmp/ownertracker-ci-evidence/corrected-windows-package-40565444105",
+      "exit_code": 1,
+      "output": "Release file inventory or checksum mismatch"
+    },
+    "missing_file_causality_probe": {
+      "change": "Restored only .env.example in a separate temporary copy, using exact Git source converted to CRLF and verified against original Windows manifest size/hash. Original downloaded archive untouched.",
+      "command": "/tmp/ownertracker-tools/node22/node_modules/node/bin/node Windows-Server/scripts/package-release.mjs --verify /tmp/ownertracker-ci-evidence/corrected-windows-package-causality-probe",
+      "exit_code": 0,
+      "output": "Verified OwnerTracker 11.1.0-preview.5: 117 files"
+    },
+    "workflow_correction": {
+      "file": ".github/workflows/windows-package.yml",
+      "changes": [
+        "Include hidden files only in already allowlisted private-data-free release directory.",
+        "Download same named artifact to distinct temporary directory.",
+        "Run existing Windows installer/rollback test against downloaded artifact, preserving all assertions."
+      ],
+      "local_checks": [
+        "Workflow YAML parses; artifact names match; upload/download directories differ; download precedes installer check.",
+        "git diff --check passed.",
+        "Node22 --test Windows-Server/test/package-release.test.mjs exited0."
+      ],
+      "remote_validation": "Requires run after publication of workflow correction."
+    }
   }
 }

@@ -5,12 +5,20 @@ Updated: 2026-10-27 (America/Phoenix). Review branch:
 
 ## Outcome
 
-Supported corrections are implemented and locally verified. The latest inspected
+Application corrections are implemented and verified locally and in the four-job
+GitHub run [40565444211](https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40565444211)
+at `745e86701ad78fdfce4b6111331ca341148bb596`. The latest inspected
 main is `cda0c6ec7f796f45ef68c153ecaa5bf3a0e87164`; its Verify OwnerTracker run
 [40426309744](https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40426309744)
 already passed all four jobs. The original repair finance-loading failure has not
 reproduced and its exact historical cause remains unresolved. Its assertions are
 preserved, with stronger failure diagnostics.
+
+Package readback found another confirmed defect: the first correction's uploaded
+Windows artifact omitted manifest-required `.env.example`, despite its pre-upload
+installer test passing. The workflow now includes hidden files from the allowlisted
+release folder and validates the downloaded artifact before reporting installation
+success. Use the final branch checks/PR for that workflow correction's exact SHA.
 
 ## Request checklist
 
@@ -24,6 +32,7 @@ preserved, with stronger failure diagnostics.
 - [x] Run the complete local regression and browser suites with fictional disposable data.
 - [x] Prepare the reviewable branch, durable evidence and bounded handoff.
 - [x] Verify the existing desktop ZIP's recorded source and all 117 manifest files.
+- [x] Read back the newly uploaded Windows artifact; identify missing `.env.example` and correct upload/readback validation.
 
 Exact-SHA platform verification is recorded by the branch's **Verify OwnerTracker**
 and **Verify Windows install and rollback** Actions/PR checks. Consult those run
@@ -43,6 +52,8 @@ they are distinct from the completed local checks below.
 - HTTP harnesses poll actual health readiness instead of fixed startup sleeps.
 - Browser failures retain HTML, screenshot, trace, timed network/pending requests,
   traceback and exact application/test source hashes.
+- Windows packaging uploads the complete allowlisted release, downloads that
+  artifact to a separate directory, and runs manifest/install/rollback checks on it.
 
 ## Completed verification
 
@@ -61,6 +72,10 @@ they are distinct from the completed local checks below.
 - Billing: **12 job/viewport combinations passed** at 390/768/1440px.
 - Readiness helper: delayed startup, early exit and unhealthy deadline cases passed.
 - Python compilation, shell syntax and `git diff --check`: passed.
+- Correction `745e867`: GitHub regressions, browser workflows, Linux server and
+  Windows launcher passed. Its Windows **pre-upload** installer check passed,
+  but downloaded artifact inventory failed because `.env.example` was absent.
+  This failure motivated the additional packaging workflow correction.
 
 ## Remaining investigation and package scope
 
@@ -74,6 +89,11 @@ The existing `downloads/OwnerTracker-Desktop-preview5.zip` matches recorded sour
 Windows workflow builds a separate package for the correction commit. A passing
 source test does not update the user's installed software. Physical shop devices
 and peripherals remain shop acceptance, outside these isolated checks.
+
+Do not use artifact `12761004344` from run `40565444105` as an installable release:
+its manifest lists 117 files but only 116 are present. The repository package
+verifier exits 1 with `Release file inventory or checksum mismatch`. The corrected
+workflow's later successful readback is the required package gate.
 
 Full reasoning, commands and Codex continuation:
 [docs/handoffs/browser_failure_investigation.md](docs/handoffs/browser_failure_investigation.md).

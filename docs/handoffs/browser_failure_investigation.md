@@ -61,6 +61,22 @@ The baseline locally passed all 280 tests and 108 syntax checks, then the V6 HTT
 
 `test/wait-for-server.mjs` replaces these fixed startup sleeps with bounded `/health` polling and process-liveness checks. It requires the expected OwnerTracker health response and prints startup log context on failure. Deterministic validation passed with 1.4-second delayed startup, early server exit, and an unhealthy endpoint that reaches the deadline. Business assertions are unchanged.
 
+### Windows artifact completeness and readback
+
+Application correction `745e86701ad78fdfce4b6111331ca341148bb596` passed all four Verify OwnerTracker jobs in [40565444211](https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40565444211). The Windows installer job in [40565444105](https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40565444105) also passed, but it tested the release directory before artifact upload.
+
+Downloaded artifact `12761004344` matched GitHub's SHA-256 digest and recorded the exact correction SHA. Its manifest listed 117 files; only 116 were present because upload-artifact omitted `.env.example`. The 116 present files matched the manifest and source (Windows CRLF differences normalized for source comparison). Both corrected application files were present. Running the real package verifier against the extracted artifact exited 1 with `Release file inventory or checksum mismatch`; the installer also requires the exact manifest inventory. This is a confirmed CI/packaging configuration defect, not a finance or customer-data failure.
+
+`.github/workflows/windows-package.yml` now uploads hidden files from the private-data-free, allowlisted release folder and downloads that artifact to a distinct directory. Manifest verification and the existing Windows installation/rollback test run against the downloaded payload. The source package builder's private-data exclusions remain intact. A successful pre-upload test alone is no longer the release gate.
+
+Failing artifact reproduction command (executed; exit 1):
+
+```bash
+/tmp/ownertracker-tools/node22/node_modules/node/bin/node Windows-Server/scripts/package-release.mjs --verify /tmp/ownertracker-ci-evidence/corrected-windows-package-40565444105
+```
+
+Consult the final branch's Windows run and PR for the workflow correction's exact tested SHA and replacement artifact. Do not install artifact `12761004344`.
+
 ## Validation
 
 Integrated local verification passed: **287 tests, 109 JavaScript syntax checks, all V6/V8/V9/V10/V11 HTTP suites, and the complete desktop/phone browser journey**. All 86 copied runtime files and all three browser test hashes match the reviewed source. The browser run produced 73 screenshots, retained the original repair finance assertion, and completed supplier receiving, pickup, partial return/refund and combined close. Focused checks also passed: 24 account-workspace/host tests, the deterministic stock/payment/draft replay, all 12 Billing layout combinations, three readiness cases, and six review-transport tests. Exact-SHA Linux/Windows conclusions are attached to the correction branch Actions and PR checks; use those records for platform verification.
