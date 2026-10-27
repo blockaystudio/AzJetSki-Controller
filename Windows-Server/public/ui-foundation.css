@@ -46,7 +46,7 @@ input,select,textarea{border-color:var(--border);max-width:100%;min-width:0}inpu
 .job-panel-heading p{margin:5px 0 0}
 .job-panel>.card+.card{margin-top:14px}
 .job-workspace .timeline,.job-workspace .timeline-item{min-width:0;max-width:100%}
-.job-workspace .timeline-item{overflow-wrap:anywhere}
+.job-workspace .timeline-item,#billingAuthorizations .timeline-item{overflow-wrap:anywhere}
 
 .retail-fulfillment-line{min-width:0;padding:16px 0;border-top:1px solid #40536a;overflow-wrap:anywhere}
 .retail-fulfillment-line h3{margin:0 0 5px}

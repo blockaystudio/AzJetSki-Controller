@@ -12,7 +12,7 @@ rm -f "$OWNERTRACKER_DB" "$OWNERTRACKER_DB-shm" "$OWNERTRACKER_DB-wal"
 node src/server.mjs > data/qa-server.log 2>&1 &
 PID=$!
 trap 'kill "$PID" 2>/dev/null || true' EXIT
-sleep 0.8
+node test/wait-for-server.mjs "$PID" "http://$HOST:$PORT/health" data/qa-server.log
 node test/integration-pos.test.mjs
 node test/payments-v8.test.mjs
 node test/thresholds.test.mjs

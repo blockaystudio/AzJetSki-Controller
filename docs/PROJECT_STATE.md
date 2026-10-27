@@ -1,6 +1,31 @@
 # OwnerTracker — compact project checkpoint
 
-Updated 2026-10-26. Read this first; load only the relevant source or handoff.
+Updated 2026-10-27. Read this first; load only the relevant source or handoff.
+
+
+## Browser failure investigation — 2026-10-27
+
+Inspected main `cda0c6e` and its successful four-job CI run `40426309744`.
+Four historical failures represent an already-corrected Ubuntu runner issue,
+two counter-sale balance failures, and one unresolved repair-account refresh
+timeout. Passing later runs did not change the implicated repair finance code.
+
+Review branch `fix/ownertracker-browser-verification` corrects reproduced
+counter-sale draft loss and stale stock callbacks, standalone Billing hash
+overflow, weak browser completion waits and fixed-sleep HTTP startup. Finance
+permissions, retained records and historical import behavior are preserved.
+The original repair finance assertion remains intact; new failure traces and
+network evidence support diagnosis if it recurs.
+
+Local verification: 287 tests, 109 syntax checks, all V6/V8/V9/V10/V11 HTTP
+regressions, 6 review-transport tests and the complete desktop/phone browser
+journey passed. All 86 runtime hashes and 3 browser-test hashes match the reviewed
+source. Platform conclusions are recorded in the branch's exact-SHA GitHub
+checks. The existing preview5 ZIP still matches its original `f3d29ff` source;
+it has not been replaced by this investigation.
+
+See [status](../status.md), [bounded handoff](handoffs/browser_failure_investigation.md)
+and [evidence](evidence/browser-investigation-2026-10-27.json).
 
 Previous follow-up (application b7119ed): preview.4 adds desktop Sales/Calendar entry, scheduling customer creation/search, and private Google OAuth configuration helper. Owner explicitly asked to WAIT for the QuickBooks export, which they will add to Drive. Shared recovery chat is now read; its schema and archive features are incorporated in `/legacy.html` with a staff-only read-only adapter. Actual ZIP and active customer merging remain pending; no real records have been merged. Google OAuth client is not yet created; connection is not active. See `SHOP_DESKTOP_ROLLOUT.md` and `handoffs/desktop_calendar_legacy.md`. Local checks: 277 tests, 104 syntax checks and expanded browser journeys passed. Verified 114-file Windows package: `/workspace/OwnerTracker-Desktop-preview4.zip`; launcher rebuilt and review refreshed.
 

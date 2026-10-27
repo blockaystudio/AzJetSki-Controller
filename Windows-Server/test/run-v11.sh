@@ -11,6 +11,6 @@ mkdir -p data
 rm -f "$OWNERTRACKER_DB" "$OWNERTRACKER_DB-wal" "$OWNERTRACKER_DB-shm"
 node src/server.mjs > data/v11-test.log 2>&1 & PID=$!
 trap 'kill "$PID" 2>/dev/null || true' EXIT
-sleep 1
+node test/wait-for-server.mjs "$PID" "http://$HOST:$PORT/health" data/v11-test.log
 node test/v11-shop-ops.test.mjs
 node test/hardening-api.test.mjs

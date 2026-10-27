@@ -54,7 +54,21 @@ def pay_counter(page, account, order_id, amount, method, reference, *, verified=
     result = post_form(page, form, f'/api/shop/retail-orders/{order_id}/payments')
     expect(account.locator('[data-finance-panel]')).to_contain_text(reference)
     expect(account.locator('[data-account-payment] [name=amount]')).to_have_value('')
+    expect(account.locator('[data-account-payment] button')).to_be_enabled()
     return result
+
+
+def issue_counter_stock(page, account, line_id, quantity):
+    """Wait for saved stock and the refreshed invoice before entering a tender."""
+    with page.expect_response(lambda r: urlparse(r.url).path == '/api/shop/inventory-adjustments'
+                              and r.request.method == 'POST') as issued:
+        page.locator(f'[data-stock-sale="{line_id}"]').click()
+    assert issued.value.ok, issued.value.text()
+    fulfillment = page.locator(f'[data-retail-fulfillment="{line_id}"]')
+    expect(fulfillment).to_contain_text(f'{quantity} of {quantity} issued from stock')
+    expect(fulfillment).to_contain_text('0 remaining')
+    expect(page.locator(f'[data-stock-sale="{line_id}"]')).to_have_count(0)
+    expect(account.locator('[data-account-payment] button')).to_be_enabled()
 
 
 def pickup_counter(page, order_id, line_id, *, expected=200):
@@ -177,14 +191,11 @@ def partial_return_refund_close(page, base, artifacts, api, no_overflow):
         'idempotencyKey':'browser-exceptions-opening'})
     order_id, account = create_counter(page, base, api, sku=sku, quantity=2, price='100.00')
     order_path = f'/api/shop/retail-orders/{order_id}'
-    with page.expect_response(lambda r: urlparse(r.url).path == '/api/shop/inventory-adjustments' and r.request.method == 'POST') as stock_issue:
-        page.locator('[data-stock-sale]').click()
-    assert stock_issue.value.ok, stock_issue.value.text()
-    expect(page.locator('[data-status=picked_up]')).to_be_visible()
     original = api(page, order_path)['order']
     assert original['total_cents'] == 21820
     line_id = original['lines'][0]['id']
     assert original['lines'][0]['quantity'] == 2
+    issue_counter_stock(page, account, line_id, 2)
     assert next(row['on_hand'] for row in api(page, '/api/shop/inventory')['stock'] if row['sku'] == sku) == 2
     pay_counter(page, account, order_id, '100.00', 'cash', 'FICTIONAL-RETURN-CASH')
     pay_counter(page, account, order_id, '118.20', 'zelle', 'FICTIONAL-RETURN-ZELLE-PENDING', verified=False)
