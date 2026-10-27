@@ -12,5 +12,5 @@ export DOCUSIGN_ENABLE_SEND=false
 rm -f "$OWNERTRACKER_DB" "$OWNERTRACKER_DB-shm" "$OWNERTRACKER_DB-wal"
 node src/server.mjs > data/v9-billing-test.log 2>&1 & PID=$!
 trap 'kill "$PID" 2>/dev/null || true' EXIT
-sleep .9
+node test/wait-for-server.mjs "$PID" "http://$HOST:$PORT/health" data/v9-billing-test.log
 node test/billing-v9.test.mjs

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {mountAccountWorkspace, renderAccountWorkspace, accountCorrections, returnableStockSales} from '../public/account-workspace.js';
-import {rememberEditRevisions} from '../public/edit-revisions-ui.js';
+import {rememberEditRevisions, prepareRevisionRequest, editConflictMessage} from '../public/edit-revisions-ui.js';
+import {postFinancialForm} from '../public/finance-ui.js';
 
 const deferred = () => { let resolve; const promise = new Promise(done => resolve = done); return {promise, resolve}; };
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -347,4 +348,204 @@ test('daily close retry keeps its key and date while changed counts get a fresh 
   assert.equal(posts[0].body.idempotencyKey, posts[1].body.idempotencyKey);
   assert.equal(posts[0].body.date, posts[1].body.date);
   assert.notEqual(posts[1].body.idempotencyKey, posts[2].body.idempotencyKey);
+});
+
+// Exercise the real counter-sale host together with the real shared account
+// mount. A host refresh must retain the same connected financial container;
+// component-only tests cannot catch an outer page discarding its restored drafts.
+const retailSource = fs.readFileSync(new URL('../public/shop-ops.js', import.meta.url), 'utf8')
+  .replace(/^import .*;\n/gm, '').replace(/\nrender\(\);\s*$/, '\n');
+function retailHostFixture(t, {intercept = async () => null, lines = []} = {}) {
+  const f = fixture(t, {intercept:async (url, options, body) => {
+    const custom = await intercept(url, options, body);
+    if (custom) return custom;
+    if (url === '/api/vendors') return {ok:true, json:async () => ({vendors:[]})};
+    if (/^\/api\/shop\/retail-orders\/\d+$/.test(url)) {
+      const id = Number(url.split('/').at(-1));
+      return {ok:true, json:async () => ({order:{id, revision:1, invoice_number:`PART-${id}`, invoice_issued_at:'2026-10-26', customer_name:`Retail ${id}`, status:'open', subtotal_cents:10000, tax_cents:910, total_cents:10910, lines, payments:[], financialEvents:[], paymentTotals:{total:10910, originalTotal:10910, due:10910}, canRefund:true, canVoid:true}})};
+    }
+  }});
+  class Detail {
+    constructor() { this.nodes = new Map(); this.isConnected = true; this.html = ''; this.statusButtons = []; this.stockButtons = []; }
+    set innerHTML(html) {
+      const old = this.nodes.get('#retailAccount');
+      if (old) old.isConnected = false;
+      this.nodes.clear(); this.html = html;
+      this.statusButtons = [];
+      this.stockButtons = [...html.matchAll(/data-stock-sale="(\d+)"/g)].map(match => ({dataset:{stockSale:match[1]}, disabled:false}));
+      if (html.includes('data-retail-retry')) this.nodes.set('[data-retail-retry]', {});
+    }
+    get innerHTML() { return this.html; }
+    insertAdjacentHTML(_position, html) {
+      this.html += html;
+      this.statusButtons.push(...[...html.matchAll(/data-line="(\d+)" data-status="([^"]+)"/g)].map(match => ({dataset:{line:match[1], status:match[2]}, disabled:false})));
+      if (html.includes('id="retailAccount"')) {
+        const container = new Container();
+        container.replaceWith = retained => {
+          container.isConnected = false;
+          retained.isConnected = this.isConnected;
+          this.nodes.set('#retailAccount', retained);
+        };
+        this.nodes.set('#retailAccount', container);
+      }
+    }
+    contains(node) { return this.nodes.get('#retailAccount') === node && node.isConnected; }
+    querySelector(selector) { return this.nodes.get(selector) || null; }
+    querySelectorAll(selector) { return ['[data-status]', '[data-line]'].includes(selector) ? this.statusButtons : selector === '[data-stock-sale]' ? this.stockButtons : []; }
+  }
+  const root = {
+    detail:new Detail(),
+    querySelector(selector) { return selector === '#retailDetail' ? this.detail : null; },
+    querySelectorAll() { return []; },
+    set innerHTML(_html) {
+      if (this.detail) {
+        this.detail.isConnected = false;
+        const account = this.detail.querySelector('#retailAccount');
+        if (account) account.isConnected = false;
+      }
+      this.detail = null;
+    }
+  };
+  const notices = [], mounts = [];
+  const mountAccount = (container, options) => { const controller = mountAccountWorkspace(container, options); mounts.push({container, controller, id:options.id}); return controller; };
+  const context = vm.createContext({document:{querySelector:() => root, createElement:() => ({setAttribute(){}, remove(){}}), body:{append:node => notices.push(node.textContent)}}, location:{search:''}, URLSearchParams, Intl, Date, Promise, setTimeout:() => 0, confirm:() => true, prompt:() => 'Fictional supplier reference', crypto:globalThis.crypto, fetch:(...args) => globalThis.fetch(...args), mountAccountWorkspace:mountAccount, postFinancialForm, prepareRevisionRequest, rememberEditRevisions, editConflictMessage, dailyNavigation:() => ''});
+  vm.runInContext(retailSource + '\nuser = {role:"owner", username:"Fictional owner"};', context);
+  return {...f, context, root, notices, mounts, open:id => context.retailDetail(id), account:() => root.detail?.querySelector('#retailAccount'), leave:() => context.shell('<p>Another operations tab</p>')};
+}
+
+test('counter-sale stock refresh retains the live account and payment drafts entered while its read is pending', async t => {
+  const wait = deferred(); let hold = false;
+  const f = retailHostFixture(t, {intercept:async (url, options) => {
+    if (hold && url === '/api/shop/retail-orders/1' && options.method === 'GET') { hold = false; await wait.promise; }
+  }});
+  await f.open(1);
+  const account = f.account(), controller = f.mounts[0].controller;
+  hold = true;
+  const refresh = f.open(1); await tick();
+  assert.equal(f.account(), account);
+  assert.equal(account.isConnected, true);
+  const payment = account.querySelector('[data-account-payment]');
+  payment.elements.amount.value = '50.00';
+  payment.elements.reference.value = 'FICTIONAL-DRAFT';
+  payment.elements.verified.checked = true;
+  wait.resolve(); await refresh;
+  assert.equal(f.account(), account);
+  assert.equal(f.mounts.length, 1);
+  assert.equal(f.mounts[0].controller, controller);
+  const restored = account.querySelector('[data-account-payment]');
+  assert.equal(restored.elements.amount.value, '50.00');
+  assert.equal(restored.elements.reference.value, 'FICTIONAL-DRAFT');
+  assert.equal(restored.elements.verified.checked, true);
+  assert.ok(account.events.some(event => event.type === 'workspace:restored'));
+});
+
+test('successive retail payments retain unrelated drafts and refresh the host without a duplicate account reload', async t => {
+  const f = retailHostFixture(t);
+  await f.open(1);
+  const account = f.account(), controller = f.mounts[0].controller;
+  const credit = account.querySelector('[data-account-credit]');
+  credit.elements.subtotal.value = '1.00'; credit.elements.reason.value = 'Fictional credit draft';
+  for (const amount of ['50.00', '59.10']) {
+    const before = f.requests.length;
+    const payment = account.querySelector('[data-account-payment]');
+    payment.elements.amount.value = amount; payment.elements.verified.checked = true;
+    await payment.onsubmit({preventDefault(){}});
+    assert.equal(f.account(), account);
+    assert.equal(f.mounts.length, 1);
+    assert.equal(f.mounts[0].controller, controller);
+    assert.equal(account.querySelector('[data-account-credit]').elements.subtotal.value, '1.00');
+    assert.equal(account.querySelector('[data-account-credit]').elements.reason.value, 'Fictional credit draft');
+    assert.equal(account.querySelector('[data-account-payment]').elements.amount.value, '');
+    const requests = f.requests.slice(before);
+    assert.equal(requests.filter(request => request.url === '/api/vendors').length, 1, 'every saved payment refreshes the outer fulfillment view');
+    assert.equal(requests.filter(request => request.url === '/api/shop/retail-orders/1' && request.method === 'GET').length, 2, 'one account refresh and one host read, without remounting/reloading the account again');
+    assert.equal(requests.filter(request => request.method === 'POST').length, 1);
+  }
+});
+
+test('a late retail host refresh and a previous account form cannot replace or charge the newly selected order', async t => {
+  const wait = deferred(); let hold = false;
+  const f = retailHostFixture(t, {intercept:async (url, options) => {
+    if (hold && url === '/api/shop/retail-orders/1' && options.method === 'GET') { hold = false; await wait.promise; }
+  }});
+  await f.open(1);
+  const first = f.account(), stalePayment = first.querySelector('[data-account-payment]');
+  stalePayment.elements.amount.value = '50.00';
+  hold = true; const oldRead = f.open(1); await tick();
+  await f.open(2); const second = f.account();
+  wait.resolve(); await oldRead;
+  assert.notEqual(second, first);
+  assert.equal(first.isConnected, false);
+  assert.equal(f.account(), second);
+  assert.equal(f.mounts.at(-1).id, 2);
+  await stalePayment.onsubmit({preventDefault(){}});
+  assert.equal(f.requests.some(request => request.method === 'POST'), false);
+  assert.match(second.innerHTML, /data-account-id="2"/);
+});
+
+test('leaving retail destroys a pending payment callback before its response can reopen the account', async t => {
+  const wait = deferred();
+  const f = retailHostFixture(t, {intercept:async (url, options) => {
+    if (url === '/api/shop/retail-orders/1/payments' && options.method === 'POST') await wait.promise;
+  }});
+  await f.open(1);
+  const payment = f.account().querySelector('[data-account-payment]');
+  payment.elements.amount.value = '10.00'; payment.elements.verified.checked = true;
+  const saving = payment.onsubmit({preventDefault(){}}); await tick();
+  f.leave();
+  const requestCount = f.requests.length;
+  wait.resolve(); await saving;
+  assert.equal(f.requests.length, requestCount);
+  assert.equal(f.mounts.length, 1);
+  assert.equal(f.root.detail, null);
+});
+
+test('failed same-order host refresh keeps financial drafts and accepted fulfillment actions usable', async t => {
+  let fail = false;
+  const f = retailHostFixture(t, {lines:[{id:17, revision:1, vendor_id:1, description:'Fictional supplier part', quantity:1, unit_price_cents:10000, status:'ordered', fulfillment:{orderedQuantity:1, fulfilledQuantity:0, remainingQuantity:1}}], intercept:async url => { if (fail && url === '/api/vendors') throw Error('Fictional vendor read failure'); }});
+  await f.open(1);
+  const account = f.account(), payment = account.querySelector('[data-account-payment]');
+  const shipped = f.root.detail.querySelectorAll('[data-status]').find(button => button.dataset.status === 'shipped');
+  assert.ok(shipped);
+  payment.elements.amount.value = '20.00';
+  fail = true;
+  assert.equal(await f.open(1), false);
+  assert.equal(f.account(), account);
+  assert.equal(payment.elements.amount.value, '20.00');
+  assert.equal(account.isConnected, true);
+  assert.match(f.notices.at(-1), /financial entries are still open/);
+  fail = false;
+  await shipped.onclick();
+  assert.equal(f.requests.filter(request => request.url === '/api/shop/retail-orders/1/lines/17/status' && request.method === 'POST').length, 1);
+  assert.equal(f.account().querySelector('[data-account-payment]').elements.amount.value, '20.00');
+});
+
+test('a stock lookup cannot issue stock after the user has selected a different counter sale', async t => {
+  const wait = deferred();
+  const f = retailHostFixture(t, {lines:[{id:17, revision:1, vendor_id:null, description:'Fictional stock part', quantity:1, unit_price_cents:10000, status:'needs_source'}], intercept:async url => {
+    if (url.startsWith('/api/shop/inventory-invoice-lines?')) { await wait.promise; return {ok:true, json:async () => ({lines:[{id:17, remainingQuantity:1, sku:'FICTIONAL-STOCK'}]})}; }
+  }});
+  await f.open(1);
+  const issue = f.root.detail.querySelectorAll('[data-stock-sale]')[0].onclick(); await tick();
+  await f.open(2); const selected = f.account();
+  wait.resolve(); await issue;
+  assert.equal(f.account(), selected);
+  assert.match(selected.innerHTML, /data-account-id="2"/);
+  assert.equal(f.requests.some(request => request.method === 'POST'), false);
+});
+
+test('a completed stock issue cannot reopen its old counter sale after the user selects another', async t => {
+  const wait = deferred();
+  const f = retailHostFixture(t, {lines:[{id:17, revision:1, vendor_id:null, description:'Fictional stock part', quantity:1, unit_price_cents:10000, status:'needs_source'}], intercept:async (url, options) => {
+    if (url.startsWith('/api/shop/inventory-invoice-lines?')) return {ok:true, json:async () => ({lines:[{id:17, remainingQuantity:1, sku:'FICTIONAL-STOCK'}]})};
+    if (url === '/api/shop/inventory-adjustments' && options.method === 'POST') await wait.promise;
+  }});
+  await f.open(1);
+  const issue = f.root.detail.querySelectorAll('[data-stock-sale]')[0].onclick(); await tick();
+  assert.equal(f.requests.filter(request => request.url === '/api/shop/inventory-adjustments' && request.method === 'POST').length, 1);
+  await f.open(2); const selected = f.account(), requestsBeforeReply = f.requests.length;
+  wait.resolve(); await issue;
+  assert.equal(f.account(), selected);
+  assert.equal(f.requests.length, requestsBeforeReply);
+  assert.match(selected.innerHTML, /data-account-id="2"/);
 });

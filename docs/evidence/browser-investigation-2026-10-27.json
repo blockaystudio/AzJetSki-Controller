@@ -1,0 +1,291 @@
+{
+  "date": "2026-10-27",
+  "timezone": "America/Phoenix",
+  "baseline_sha": "cda0c6ec7f796f45ef68c153ecaa5bf3a0e87164",
+  "historical_runs": [
+    {
+      "id": 40426309744,
+      "sha": "cda0c6ec7f796f45ef68c153ecaa5bf3a0e87164",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40426309744",
+      "jobs": {
+        "linux-server": "success",
+        "browser-workflows": "success",
+        "regressions": "success",
+        "windows-launcher": "success"
+      }
+    },
+    {
+      "id": 40426177427,
+      "sha": "f3d29ff5b0154b594b41fc86ee25c2260c5821ce",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40426177427",
+      "jobs": {
+        "linux-server": "success",
+        "browser-workflows": "success",
+        "regressions": "success",
+        "windows-launcher": "success"
+      }
+    },
+    {
+      "id": 40412001065,
+      "sha": "0333ff214dac4a5cf2ac9fbeb9f78c9894c4d69d",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40412001065",
+      "jobs": {
+        "regressions": "success",
+        "linux-server": "success",
+        "browser-workflows": "failure",
+        "windows-launcher": "success"
+      }
+    },
+    {
+      "id": 40411740393,
+      "sha": "f86c536cb0857bf4688b12942546763f16f502f5",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40411740393",
+      "jobs": {
+        "regressions": "success",
+        "windows-launcher": "success",
+        "linux-server": "success",
+        "browser-workflows": "success"
+      }
+    },
+    {
+      "id": 40411589545,
+      "sha": "b7119ed68f2ade4a1a742d2d69298a8a98bf40c9",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40411589545",
+      "jobs": {
+        "linux-server": "success",
+        "browser-workflows": "failure",
+        "windows-launcher": "success",
+        "regressions": "success"
+      }
+    },
+    {
+      "id": 40410580876,
+      "sha": "5ea257fc2cbdab6496bdec96bc85205f758e12f5",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40410580876",
+      "jobs": {
+        "regressions": "success",
+        "browser-workflows": "failure",
+        "windows-launcher": "success",
+        "linux-server": "success"
+      }
+    },
+    {
+      "id": 40396336965,
+      "sha": "080cc160639dc2ef3f42e6110bbbaaecc3307fef",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40396336965",
+      "jobs": {
+        "regressions": "success",
+        "browser-workflows": "failure",
+        "windows-launcher": "success"
+      }
+    }
+  ],
+  "original_finance_failure": {
+    "run": 40412001065,
+    "account_selector": "[data-account-workspace][data-scope=repair][data-account-id=\"5\"]",
+    "observed_dom": "Payments tab selected; account container holds Loading payments and documents\u2026; no finance/account element",
+    "later_source_change_in_finance_path": false,
+    "complete_unmodified_workspace_reproduction": "PASS",
+    "controlled_interceptor_removal_reproduction": "PASS",
+    "root_cause": "Unresolved; no supported finance application patch"
+  },
+  "counter_payment_reproduction": {
+    "original_stock_wait_passed_while_response_held": true,
+    "entered_amount_before_release": "50.00",
+    "amount_after_stock_refresh": "",
+    "original_postclick_checks_passed_without_payment": true,
+    "payment_requests_after_first_click": 0,
+    "original_final_assertion": {
+      "due_cents": 5000,
+      "payment_count": 1,
+      "would_pass": false
+    },
+    "credit_draft_discarded_by_host_refresh": true
+  },
+  "billing_layout": {
+    "fixture": "REVIEW-1002 retained authorization",
+    "phone_width": 390,
+    "document_width_before": 577,
+    "cause": "Unwrapped retained snapshot SHA-256 in standalone billing history",
+    "post_fix_combinations": 12,
+    "post_fix_result": "PASS; every document width equals its viewport"
+  },
+  "readiness_validation": [
+    {
+      "case": "delayed startup beyond prior fixed sleeps",
+      "result": "PASS",
+      "evidence": "PASS: disposable server ready at http://127.0.0.1:32963/health"
+    },
+    {
+      "case": "early server exit with useful log",
+      "result": "PASS",
+      "evidence": "Server process 12483 exited before becoming ready\nServer log (/tmp/ownertracker-ci-evidence/readiness-early-exit-server.log):\nFICTIONAL BOOT ERROR: requested test exit"
+    },
+    {
+      "case": "unhealthy endpoint and bounded deadline",
+      "result": "PASS",
+      "evidence": "Server 12499 was not ready at http://127.0.0.1:37493/health within 500ms: HTTP 503; expected the OwnerTracker healthy response\nServer log (/tmp/ownertracker-ci-evidence/readiness-unhealthy-server.log):\n(empty)"
+    }
+  ],
+  "existing_desktop_package": {
+    "package": "downloads/OwnerTracker-Desktop-preview5.zip",
+    "manifest_commit": "f3d29ff",
+    "verified_source_sha": "f3d29ff5b0154b594b41fc86ee25c2260c5821ce",
+    "version": "11.1.0-preview.5",
+    "files": 117,
+    "manifest_mismatches": [],
+    "source_mismatches": [],
+    "sha256": "947edc4cb35a31b258923df434e270f8fce0675d4c2223955f913cbf15e29c85"
+  },
+  "integrated_verification": {
+    "local_result": "PASS",
+    "runtime_source_files_matched": 86,
+    "browser_test_files_matched": 3,
+    "browser_test_sha256": {
+      "browser-shop.py": "61fc5a35ee14642282de8fa7066075b6e375cd74d5401dcf3f732c3753e9976d",
+      "browser_operations.py": "f104a89ca37557b2a9520f3af30cbca494352ed1657d90d3216ffdf0ce561b73",
+      "browser_workspace.py": "7c4e5167c4cfc9cae7fc4375c6f08ff87ffa1b0557364ae3a0daaa9aa05a5753"
+    },
+    "source_sha256": {
+      "public/shop-ops.js": "fc4bf9d7ca035f72911ca8711200275278969f49ba3ae79361131055474d8720",
+      "public/ui-foundation.css": "96742ab0aa16e9703ef2916f93be7f1923e612c71d9af16e0842b1ea997c08cf",
+      "public/account-workspace.js": "de52fe0b12aff0c04b9444413a84d518c26e74ba3efed5e3980e4329695ba0c3",
+      "public/finance-ui.js": "ecb7b7ef2064229373230a8fc54f4a111f07b6825b7d31092ba1ffdc38c00419"
+    },
+    "screenshots": 73,
+    "playwright": "1.56.0",
+    "chromium": "141.0.7390.37",
+    "node": "22.23.4",
+    "python": "3.12.14",
+    "platform_ci": "Use the correction branch Actions/PR checks for exact-SHA platform conclusions."
+  },
+  "counter_payment_corrected": {
+    "amount_after_stock_refresh": "50.00",
+    "stock_refresh_discarded_payment_draft": false,
+    "first_due_cents": 5965,
+    "credit_draft_after_payment": {
+      "subtotal": "1.00",
+      "reason": "Fictional retained credit draft"
+    },
+    "final_due_cents": 0,
+    "recorded_payments": [
+      {
+        "amount_cents": 5000,
+        "method": "cash",
+        "status": "confirmed"
+      },
+      {
+        "amount_cents": 5965,
+        "method": "card_dejavoo",
+        "status": "confirmed"
+      }
+    ],
+    "payment_post_count": 2,
+    "on_hand_after_single_stock_issue": 2,
+    "page_errors": []
+  },
+  "local_regression_result": {
+    "node": "22.23.4",
+    "syntax_files": 109,
+    "tests": 287,
+    "failed": 0,
+    "http_suites": [
+      "V6",
+      "V8",
+      "V9",
+      "V10",
+      "V11"
+    ],
+    "result": "PASS",
+    "review_transport_tests": 6,
+    "review_transport_result": "PASS"
+  },
+  "first_correction_remote_verification": {
+    "sha": "745e86701ad78fdfce4b6111331ca341148bb596",
+    "ownertracker_run": 40565444211,
+    "ownertracker_jobs": {
+      "regressions": "success",
+      "browser-workflows": "success",
+      "linux-server": "success",
+      "windows-launcher": "success"
+    },
+    "pre_upload_windows_run": 40565444105,
+    "pre_upload_windows_result": "success",
+    "artifact_readback_result": "FAILED; manifest-required .env.example missing"
+  },
+  "windows_artifact_readback_defect": {
+    "run_id": 40565444105,
+    "artifact_id": 12761004344,
+    "artifact_url": "https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40565444105/artifacts/12761004344",
+    "manifest_commit": "745e86701ad78fdfce4b6111331ca341148bb596",
+    "version": "11.1.0-preview.5",
+    "zip_size": 5229084,
+    "zip_sha256": "57c72592ce0d9959504d9dc3c527d08734ead58e083b3d2ed59ae1472ac3ad70",
+    "manifest_file_count": 117,
+    "archive_entry_count": 117,
+    "missing_from_archive": [
+      ".env.example"
+    ],
+    "manifest_mismatches": [],
+    "source_content_mismatches": [],
+    "exact_source_matches": 4,
+    "crlf_only_matches": 112,
+    "critical_files": {
+      "public/shop-ops.js": {
+        "sha256_archive": "e26d9eef5d5c0cc11a2c58fe2c4c5eaee9f446395286c9fbc3be8a02d77f98d8",
+        "sha256_git": "fc4bf9d7ca035f72911ca8711200275278969f49ba3ae79361131055474d8720",
+        "exact_match": false,
+        "normalized_lf_match": true
+      },
+      "public/ui-foundation.css": {
+        "sha256_archive": "103f98848711eb21c031960046cba6ade0da21081b90c055a17c7ee91fdff40d",
+        "sha256_git": "96742ab0aa16e9703ef2916f93be7f1923e612c71d9af16e0842b1ea997c08cf",
+        "exact_match": false,
+        "normalized_lf_match": true
+      }
+    },
+    "verifier_exit_code": 1,
+    "verifier_error": "Release file inventory or checksum mismatch",
+    "classification": "Environment or CI configuration problem",
+    "correction": "Upload hidden files only from the allowlisted private-data-free release; download the uploaded artifact into a separate folder and verify its manifest and actual Windows install/rollback.",
+    "downloaded_package_verification": {
+      "command": "/tmp/ownertracker-tools/node22/node_modules/node/bin/node Windows-Server/scripts/package-release.mjs --verify /tmp/ownertracker-ci-evidence/corrected-windows-package-40565444105",
+      "exit_code": 1,
+      "output": "Release file inventory or checksum mismatch"
+    },
+    "missing_file_causality_probe": {
+      "change": "Restored only .env.example in a separate temporary copy, using exact Git source converted to CRLF and verified against original Windows manifest size/hash. Original downloaded archive untouched.",
+      "command": "/tmp/ownertracker-tools/node22/node_modules/node/bin/node Windows-Server/scripts/package-release.mjs --verify /tmp/ownertracker-ci-evidence/corrected-windows-package-causality-probe",
+      "exit_code": 0,
+      "output": "Verified OwnerTracker 11.1.0-preview.5: 117 files"
+    },
+    "workflow_correction": {
+      "file": ".github/workflows/windows-package.yml",
+      "changes": [
+        "Include hidden files only in already allowlisted private-data-free release directory.",
+        "Download same named artifact to distinct temporary directory.",
+        "Run existing Windows installer/rollback test against downloaded artifact, preserving all assertions."
+      ],
+      "local_checks": [
+        "Workflow YAML parses; artifact names match; upload/download directories differ; download precedes installer check.",
+        "git diff --check passed.",
+        "Node22 --test Windows-Server/test/package-release.test.mjs exited0."
+      ],
+      "remote_validation": "Requires run after publication of workflow correction."
+    }
+  }
+}

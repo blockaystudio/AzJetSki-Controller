@@ -13,5 +13,5 @@ unset SENDGRID_API_KEY SMTP_USER SMTP_APP_PASSWORD INVOICE_FROM_EMAIL EPSON_PRIN
 rm -f "$OWNERTRACKER_DB" "$OWNERTRACKER_DB-shm" "$OWNERTRACKER_DB-wal"
 node src/server.mjs > data/v10-test.log 2>&1 & PID=$!
 trap 'kill "$PID" 2>/dev/null || true' EXIT
-sleep 1
+node test/wait-for-server.mjs "$PID" "http://$HOST:$PORT/health" data/v10-test.log
 node test/v10-address-devices.test.mjs

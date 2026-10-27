@@ -23,10 +23,16 @@ jobs:
         working-directory: Windows-Server
         shell: pwsh
         run: node scripts/package-release.mjs "$env:RUNNER_TEMP\OwnerTracker-release"
-      - name: Verify installation and rollback on Windows
-        shell: pwsh
-        run: ./Windows-Server/windows/Test-Installer.ps1 -ReleaseDir "$env:RUNNER_TEMP\OwnerTracker-release"
       - uses: actions/upload-artifact@v4
         with:
           name: OwnerTracker-shop-release
           path: ${{ runner.temp }}/OwnerTracker-release
+          # The release packager allowlists .env.example and excludes private data.
+          include-hidden-files: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: OwnerTracker-shop-release
+          path: ${{ runner.temp }}/OwnerTracker-release-downloaded
+      - name: Verify downloaded installation and rollback on Windows
+        shell: pwsh
+        run: ./Windows-Server/windows/Test-Installer.ps1 -ReleaseDir "$env:RUNNER_TEMP\OwnerTracker-release-downloaded"

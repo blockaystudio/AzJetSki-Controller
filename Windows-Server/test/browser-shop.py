@@ -4,22 +4,80 @@ Run: python test/browser-shop.py (requires playwright + Chromium).
 import json
 import hashlib
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import shutil
 import socket
 import subprocess
 import tempfile
 import time
+import traceback
 import urllib.request
 from playwright.sync_api import sync_playwright, expect
 from browser_workspace import run_workspace_journeys, responsive
-from browser_operations import run_operations_journeys
+from browser_operations import run_operations_journeys, issue_counter_stock, pay_counter
 
 SOURCE = Path(__file__).resolve().parents[1]
 NODE = os.environ.get('OWNERTRACKER_NODE', 'node')
 ARTIFACTS = Path(os.environ.get('OWNERTRACKER_BROWSER_ARTIFACTS', tempfile.mkdtemp(prefix='ownertracker-browser-artifacts-')))
 ARTIFACTS.mkdir(parents=True, exist_ok=True)
 PASSWORD = 'Review-Only-2026!'
+
+
+@contextmanager
+def browser_failure_evidence():
+    """Retain the failed page and pending reads for every shop journey."""
+    state = {'page': None}
+    events, pending = [], {}
+    started = time.monotonic()
+
+    def record(event):
+        event['seconds'] = round(time.monotonic() - started, 6)
+        events.append(event)
+
+    def observe(page):
+        state['page'] = page
+        page.context.tracing.start(screenshots=True, snapshots=True, sources=False)
+
+        def request_started(request):
+            event = {'event': 'request', 'method': request.method, 'url': request.url}
+            pending[request] = event
+            record(event)
+
+        def request_finished(request):
+            pending.pop(request, None)
+            record({'event': 'finished', 'method': request.method, 'url': request.url})
+
+        def request_failed(request):
+            pending.pop(request, None)
+            record({'event': 'failed', 'method': request.method, 'url': request.url,
+                    'failure': request.failure})
+
+        page.on('request', request_started)
+        page.on('requestfinished', request_finished)
+        page.on('requestfailed', request_failed)
+        page.on('response', lambda response: record({
+            'event': 'response', 'method': response.request.method,
+            'url': response.url, 'status': response.status}))
+        page.on('pageerror', lambda error: record({'event': 'pageerror', 'message': str(error)}))
+
+    try:
+        yield observe
+    except Exception:
+        (ARTIFACTS / 'browser-failure.txt').write_text(traceback.format_exc())
+        (ARTIFACTS / 'browser-network.json').write_text(json.dumps({
+            'pending': list(pending.values()), 'events': events}, indent=2))
+        page = state['page']
+        if page is not None:
+            for capture in [
+                    lambda: (ARTIFACTS / 'browser-failure.html').write_text(page.content()),
+                    lambda: page.screenshot(path=str(ARTIFACTS / 'browser-failure.png'), full_page=True, timeout=5000),
+                    lambda: page.context.tracing.stop(path=str(ARTIFACTS / 'browser-trace.zip'))]:
+                try:
+                    capture()
+                except Exception as capture_error:
+                    print('Unable to capture browser evidence:', capture_error, flush=True)
+        raise
 
 
 def session_headers(page):
@@ -47,13 +105,14 @@ def visit(page, base, route, ready):
 
 
 def run(base):
-    with sync_playwright() as playwright:
+    with sync_playwright() as playwright, browser_failure_evidence() as observe:
         executable = os.environ.get('OWNERTRACKER_BROWSER')
         if not executable and not Path(playwright.chromium.executable_path).exists() and Path('/usr/bin/chromium').exists():
             executable = '/usr/bin/chromium'
         browser = playwright.chromium.launch(headless=True, executable_path=executable, args=['--no-sandbox', '--disable-dev-shm-usage'])
         context = browser.new_context(reduced_motion='reduce')
         page = context.new_page()
+        observe(page)
         errors = []
         page.on('pageerror', lambda e: errors.append(str(e)))
         page.goto(base)
@@ -61,6 +120,8 @@ def run(base):
         page.get_by_label('Password or employee PIN', exact=True).fill(PASSWORD)
         page.get_by_role('button', name='Sign in', exact=True).click()
         page.get_by_role('heading', name='Today', exact=True).wait_for()
+        retained_job = next(job for job in api(page, '/api/work-orders')['workOrders']
+                            if job['ref_number'] == 'REVIEW-1002')
         routes = [('/', '#view .metrics'), ('/billing.html', '#jobinfo b'), ('/shop-ops.html', '#ops-main'), ('/shop-management.html', '#policy'), ('/accounting.html', '#workspace:not([hidden])'), ('/shop-reports.html', '#report .card'), ('/owner.html', '#mobile-app .daily-actions'), ('/tech.html', '.listing'), ('/launch.html', '#security form')]
         for width in [390, 768, 1440]:
             page.set_viewport_size({'width': width, 'height': 900})
@@ -68,6 +129,14 @@ def run(base):
             for route, ready in routes:
                 visit(page, base, route, ready)
                 no_overflow(page, f'{route} at {width}')
+                if route == '/billing.html':
+                    # Default order depends on seed timing. Always exercise a
+                    # retained authorization's full SHA-256 at phone widths.
+                    page.locator('#jobs').select_option(str(retained_job['id']))
+                    expect(page.locator('#jobinfo')).to_contain_text('REVIEW-1002')
+                    expect(page.locator('#billingAuthorizations')).to_contain_text('Snapshot SHA-256:')
+                    no_overflow(page, f'billing retained authorization at {width}')
+                    page.screenshot(path=str(ARTIFACTS / f'billing-retained-authorization-{width}.png'), full_page=True)
                 if route == '/':
                     assert page.get_by_role('link', name='New Repair / Check In').count() == 1
                     assert page.get_by_role('link', name='New Counter Sale').count() == 1
@@ -182,21 +251,19 @@ def run(base):
         page.on('dialog', accept_dialog)
         page.locator('#issueRetail').click()
         page.locator('[data-account-workspace][data-scope=retail] [data-account-payment]').wait_for()
-        page.locator('[data-stock-sale]').click()
-        page.locator('[data-status=picked_up]').wait_for()
         order = next(row for row in api(page, '/api/shop/retail-orders')['orders'] if row['id'] not in existing)
-        for amount, method in [('50.00','cash'), ('59.65','card_dejavoo')]:
-            page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] [name=method]').select_option(method)
-            page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] [name=amount]').fill(amount)
-            page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] [name=reference]').fill('FICTIONAL-BROWSER-RECEIPT')
-            page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] [name=verified]').check()
-            page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] button').click()
-            expect(page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] [name=amount]')).to_have_value('')
-            expect(page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] button')).to_be_enabled()
+        account = page.locator(f'[data-account-workspace][data-scope=retail][data-account-id="{order["id"]}"]')
+        issue_counter_stock(page, account, order['lines'][0]['id'], 1)
+        for amount, method, reference, due in [
+                ('50.00','cash','FICTIONAL-BROWSER-RECEIPT-CASH',5965),
+                ('59.65','card_dejavoo','FICTIONAL-BROWSER-RECEIPT-CARD',0)]:
+            result = pay_counter(page, account, order['id'], amount, method, reference)
+            assert result['totals']['due'] == due, result
         paid = api(page, f"/api/shop/retail-orders/{order['id']}")['order']
-        assert paid['paymentTotals']['due'] == 0
-        assert len(paid['payments']) == 2
-        expect(page.locator('[data-account-workspace][data-scope=retail] [data-finance-panel]')).to_contain_text('FICTIONAL-BROWSER-RECEIPT')
+        assert paid['paymentTotals']['due'] == 0, paid['paymentTotals']
+        assert len(paid['payments']) == 2, paid['payments']
+        expect(account.locator('[data-finance-panel]')).to_contain_text('FICTIONAL-BROWSER-RECEIPT-CASH')
+        expect(account.locator('[data-finance-panel]')).to_contain_text('FICTIONAL-BROWSER-RECEIPT-CARD')
         responsive(page, ARTIFACTS, no_overflow, 'counter-paid-ledger')
         page.locator('[data-status=picked_up]').click()
         page.wait_for_function("!document.querySelector('[data-status=picked_up]')")
@@ -222,6 +289,7 @@ def run(base):
         (ARTIFACTS/'contrast.json').write_text(json.dumps({'colors':colors,'ratios':ratios},indent=2))
         print('Contrast ratios:', ratios, flush=True)
         assert not errors, errors
+        context.tracing.stop()
         browser.close()
         print('PASS: nine pages at 390/768/1440; operations/management tabs; equal daily entry points; decimal input; keyboard focus; reduced motion; billing deselection/races; mobile empty states; guided customer/unit intake; job tabs/deep links/unsaved guards; retained revised approvals; contextual invoice/payment ledger; counter stock/special-order partial-receipt retry/payment/pickup; partial return/original-payment refund/combined close; truthful outcomes')
 
@@ -236,6 +304,9 @@ def main():
         manifest = {str(path.relative_to(runtime)): hashlib.sha256(path.read_bytes()).hexdigest()
                     for path in sorted(runtime.rglob('*')) if path.is_file()}
         (ARTIFACTS / 'source-manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True))
+        test_manifest = {name: hashlib.sha256((SOURCE / 'test' / name).read_bytes()).hexdigest()
+                         for name in ['browser-shop.py', 'browser_workspace.py', 'browser_operations.py']}
+        (ARTIFACTS / 'test-source-manifest.json').write_text(json.dumps(test_manifest, indent=2, sort_keys=True))
         (runtime / 'data').mkdir()
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0))
