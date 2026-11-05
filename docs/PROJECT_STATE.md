@@ -35,7 +35,7 @@ Updated 2026-11-05. Read this first; load only the relevant source or bounded ha
 
 ## Pending work and next gates
 
-1. Preview.6 application commit d8b939b; verified 118-file desktop package and private review refreshed. See release follow-up for final download/publication status.
+1. Completed: application d8b939b and release follow-up fc46c3e are published on main. Verified 118-file desktop ZIP: downloads/OwnerTracker-Desktop-preview6.zip. Private review HTTPS health returned200; existing business record counts match the pre-update backup.
 2. Owner registers the current review callback in Google Cloud, then completes consent from Calendar; verify explicit sync with a fictional appointment after approval.
 3. Select hosting account and owned domain, provision using SERVER_DEPLOYMENT.md and establish stable HTTPS/callback.
 4. Reconcile active starting inventory/prices/balances, review migration exceptions and create named staff accounts.

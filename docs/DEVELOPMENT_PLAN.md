@@ -18,7 +18,7 @@ Updated 2026-11-05. One AZ Jet Ski shop; repairs and counter parts sales have eq
 
 ## Delivery order
 
-1. Preview.6 local checks passed: 307 tests/subtests, 111 syntax files, legacy HTTP regressions and shop/history browser journeys. Publish the verified source and desktop package; refresh the existing owner-private review while preserving private credentials and imported data.
+1. Preview.6 local checks passed: 307 tests/subtests, 111 syntax files, legacy HTTP regressions and shop/history browser journeys. Application d8b939b and release fc46c3e published; 118-file desktop package and owner-private review updated, with HTTPS health200 and private data/configuration preserved.
 2. Register the changed review callback in Google Cloud (see SHOP_DESKTOP_ROLLOUT.md), then complete Google consent from the app's Calendar. Explicitly sync and confirm a fictional appointment before customer scheduling.
 3. Provision the selected permanent server using SERVER_DEPLOYMENT.md once the account/domain is available.
 4. Run the device/peripheral walkthrough and encrypted offsite recovery. Begin a controlled shop pilot after starting data and payments balance.
