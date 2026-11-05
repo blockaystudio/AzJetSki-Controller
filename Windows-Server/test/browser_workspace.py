@@ -251,7 +251,7 @@ def contextual_account(page, base, artifacts, api, no_overflow, job):
         form.locator('[name=email]').fill('browser-customer@example.invalid')
         if form.locator('[name=sendEmail]').count():
             form.locator('[name=sendEmail]').uncheck()
-        with page.expect_response(lambda r: invoice_path in r.url and r.request.method == 'POST') as result:
+        with page.expect_response(lambda r: urlparse(r.url).path == invoice_path and r.request.method == 'POST') as result:
             form.locator('button[type=submit],button:not([type])').first.click()
         assert result.value.ok, result.value.text()
         expect(account.locator('[data-account-invoice] button').first).to_be_enabled()
@@ -271,6 +271,21 @@ def contextual_account(page, base, artifacts, api, no_overflow, job):
     form.locator('[name=verified]').check()
     # Saving one financial action must retain a different unfinished form.
     account.locator('[data-account-invoice] [name=email]').fill('unfinished-invoice@example.invalid')
+    previous_workspace = account.element_handle()
+    page.evaluate('''() => {
+        window.contextualAccountEvents = [];
+        const container = document.querySelector('#jobAccountWorkspace');
+        const capture = event => {
+            const form = event.target.closest('form');
+            window.contextualAccountEvents.push({
+                type:event.type, scope:event.detail?.scope, id:event.detail?.id,
+                form:form?.hasAttribute('data-account-payment') ? 'payment' : form?.hasAttribute('data-account-invoice') ? 'invoice' : 'other',
+                email:form?.elements.email?.value, result:event.detail?.result
+            });
+        };
+        container.addEventListener('workspace:saved', capture);
+        container.addEventListener('workspace:restored', capture);
+    }''')
     payment_path = f'/api/pos/work-orders/{job_id}/payments'
     held = []
     def delay_payment(route):
@@ -283,22 +298,49 @@ def contextual_account(page, base, artifacts, api, no_overflow, job):
                 break
             page.wait_for_timeout(10)
         assert len(held) == 1
+        submitted = held[0].request.post_data_json
+        assert (submitted['method'], submitted['amount'], submitted['reference'], submitted['verified'], submitted['status']) == ('cash', '25.50', 'FICTIONAL-BROWSER-CASH', True, 'confirmed'), submitted
         expect(account.locator('[data-account-refresh]')).to_be_disabled()
         expect(account.locator('[data-account-invoice] button')).to_be_disabled()
-        with page.expect_response(lambda r: payment_path in r.url and r.request.method == 'POST') as payment:
+        # A second submit while the request is held must stay inside the busy guard.
+        form.evaluate('(form) => form.requestSubmit()')
+        assert len(held) == 1
+        with page.expect_response(lambda r: urlparse(r.url).path == payment_path and r.request.method == 'POST') as payment:
             held.pop().continue_()
-        assert payment.value.ok, payment.value.text()
+        assert payment.value.status == 201, (payment.value.status, payment.value.text())
+        saved = payment.value.json()
+        assert saved['status'] == 'confirmed' and not saved.get('duplicate'), saved
     finally:
         for route in held:
             route.continue_()
         page.unroute('**' + payment_path)
-    expect(account.locator('[data-finance-panel]')).to_contain_text('FICTIONAL-BROWSER-CASH')
-    expect(account.locator('[data-account-invoice] [name=email]')).to_have_value('unfinished-invoice@example.invalid')
-    assert parse_qs(urlparse(page.url).query)['workOrderId'] == [str(job_id)]
     result = api(page, f'/api/pos/work-orders/{job_id}/payments')
-    assert len(result['payments']) == 1 and result['payments'][0]['amount_cents'] == 2550
+    assert len(result['payments']) == 1, result
+    recorded = result['payments'][0]
+    assert (recorded['id'], recorded['amount_cents'], recorded['method'], recorded['status'], recorded['reference']) == (saved['id'], 2550, 'cash', 'confirmed', 'FICTIONAL-BROWSER-CASH'), recorded
     assert float(result['totals']['balance']) == 75.00, result['totals']
     assert float(result['totals']['paid']) == 25.50
+    try:
+        # HTTP acknowledgement precedes the account's asynchronous replacement.
+        # Require both the saved action and the restored unrelated draft before
+        # inspecting the new ledger or testing the unsaved-navigation guard.
+        page.wait_for_function('(previous) => !previous.isConnected', arg=previous_workspace)
+        page.wait_for_function('''({id, paymentId}) => {
+            const events = window.contextualAccountEvents || [];
+            return events.some(event => event.type === 'workspace:saved' && event.scope === 'repair' && event.id === id && event.form === 'payment' && event.result?.id === paymentId)
+                && events.some(event => event.type === 'workspace:restored' && event.scope === 'repair' && event.id === id && event.form === 'invoice' && event.email === 'unfinished-invoice@example.invalid');
+        }''', arg={'id':job_id, 'paymentId':saved['id']})
+        expect(account.locator('[data-account-payment] button')).to_be_enabled()
+        expect(account.locator('[data-finance-panel]')).to_contain_text('FICTIONAL-BROWSER-CASH')
+        expect(account.locator('[data-account-invoice] [name=email]')).to_have_value('unfinished-invoice@example.invalid')
+        expect(account.locator('[data-account-payment] [name=amount]')).to_have_value('')
+    except Exception:
+        print('Contextual account refresh diagnostics:', page.evaluate('''() => ({
+            url:location.href, payments:document.querySelector('#jobAccountWorkspace')?.textContent,
+            events:window.contextualAccountEvents || []
+        })'''), flush=True)
+        raise
+    assert parse_qs(urlparse(page.url).query)['workOrderId'] == [str(job_id)]
     responsive(page, artifacts, no_overflow, 'job-account-with-ledger')
     dialogs = []
     def keep_draft(dialog):
