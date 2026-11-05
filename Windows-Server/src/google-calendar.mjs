@@ -2,6 +2,7 @@
 // No passwords in app; refresh token encrypted at rest; appointments keep independent local records.
 // Production requires a Google Cloud OAuth Web Application, HTTPS callback and configured env vars.
 import crypto from 'node:crypto';
+import {googleFetch} from './google-transport.mjs';
 const enc=x=>encodeURIComponent(x);
 const digest=x=>crypto.createHash('sha256').update(x).digest('hex');
 const txt=x=>String(x??'').trim();
@@ -32,7 +33,7 @@ export function googleCalendarConfig(){const c=conf();const configured=!!(c.clie
 function key(){const x=conf().tokenKey;if(!/^[a-f0-9]{64}$/i.test(x))throw Error('GOOGLE_CALENDAR_TOKEN_KEY must be 32 random bytes expressed as 64 hex digits');return Buffer.from(x,'hex')}
 function encrypt(value){const nonce=crypto.randomBytes(12),c=crypto.createCipheriv('aes-256-gcm',key(),nonce),ciphertext=Buffer.concat([c.update(value,'utf8'),c.final()]);return [nonce.toString('base64url'),c.getAuthTag().toString('base64url'),ciphertext.toString('base64url')].join('.');}
 function decrypt(value){const [n,t,b]=String(value).split('.');if(!b)throw Error('Invalid token storage');const d=crypto.createDecipheriv('aes-256-gcm',key(),Buffer.from(n,'base64url'));d.setAuthTag(Buffer.from(t,'base64url'));return Buffer.concat([d.update(Buffer.from(b,'base64url')),d.final()]).toString('utf8');}
-async function jsonFetch(url,init={}){const res=await fetch(url,{...init,signal:AbortSignal.timeout(12000)});const body=await res.json().catch(()=>({}));if(!res.ok)throw Error(`Google API HTTP ${res.status}: ${JSON.stringify(body).slice(0,350)}`);return body;}
+async function jsonFetch(url,init={},fetchImpl=googleFetch){const res=await fetchImpl(url,{...init,signal:AbortSignal.timeout(12000)});const body=await res.json().catch(()=>({}));if(!res.ok)throw Error(`Google API HTTP ${res.status}; retry the Calendar connection or check the Google Cloud configuration`);return body;}
 export function googleStatus(db){const conn=db.prepare('SELECT email,connected_at FROM google_calendar_connection WHERE id=1').get();return {...googleCalendarConfig(),connected:!!conn,email:conn?.email||null,connectedAt:conn?.connected_at||null};}
 export function startGoogleAuth(db,userId){const c=conf();if(!googleCalendarConfig().configured)throw Error('Google Calendar OAuth credentials and HTTPS callback not configured');
  const state=crypto.randomBytes(32).toString('base64url');db.prepare('DELETE FROM google_oauth_states WHERE expires_at<CURRENT_TIMESTAMP').run();
@@ -40,17 +41,17 @@ export function startGoogleAuth(db,userId){const c=conf();if(!googleCalendarConf
  const p=new URLSearchParams({client_id:c.clientId,redirect_uri:c.callback,response_type:'code',login_hint:c.expectedEmail,scope:'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email openid',access_type:'offline',prompt:'consent',state});
  return oauth.authorize+'?'+p;
 }
-export async function completeGoogleAuth(db,code,state){if(!code||!state)throw Error('Missing OAuth code/state');const row=db.prepare('SELECT * FROM google_oauth_states WHERE state_hash=? AND expires_at>CURRENT_TIMESTAMP').get(digest(state));if(!row)throw Error('Expired or invalid calendar OAuth state');
+export async function completeGoogleAuth(db,code,state,{fetchImpl=googleFetch}={}){if(!code||!state)throw Error('Missing OAuth code/state');const row=db.prepare('SELECT * FROM google_oauth_states WHERE state_hash=? AND expires_at>CURRENT_TIMESTAMP').get(digest(state));if(!row)throw Error('Expired or invalid calendar OAuth state');
  db.prepare('DELETE FROM google_oauth_states WHERE state_hash=?').run(digest(state));
- const c=conf();const tokens=await jsonFetch(oauth.token,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({code,client_id:c.clientId,client_secret:c.clientSecret,redirect_uri:c.callback,grant_type:'authorization_code'})});
+ const c=conf();const tokens=await jsonFetch(oauth.token,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({code,client_id:c.clientId,client_secret:c.clientSecret,redirect_uri:c.callback,grant_type:'authorization_code'})},fetchImpl);
  if(!tokens.access_token||!tokens.refresh_token)throw Error('Google did not supply refresh token; reconnect with consent');
- const profile=await jsonFetch(oauth.userinfo,{headers:{authorization:`Bearer ${tokens.access_token}`}});
+ const profile=await jsonFetch(oauth.userinfo,{headers:{authorization:`Bearer ${tokens.access_token}`}},fetchImpl);
  if(txt(profile.email).toLowerCase()!==c.expectedEmail.toLowerCase()||profile.email_verified!==true)throw Error(`Unexpected Google account. Sign in as ${c.expectedEmail}`);
  db.prepare(`INSERT INTO google_calendar_connection(id,email,encrypted_refresh_token) VALUES(1,?,?)
    ON CONFLICT(id) DO UPDATE SET email=excluded.email,encrypted_refresh_token=excluded.encrypted_refresh_token,updated_at=CURRENT_TIMESTAMP`).run(profile.email,encrypt(tokens.refresh_token));
  return {email:profile.email,connected:true};
 }
-async function accessToken(db){const conn=db.prepare('SELECT * FROM google_calendar_connection WHERE id=1').get();if(!conn)throw Error('Google Calendar is not connected');const c=conf();const t=await jsonFetch(oauth.token,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({client_id:c.clientId,client_secret:c.clientSecret,refresh_token:decrypt(conn.encrypted_refresh_token),grant_type:'refresh_token'})});if(!t.access_token)throw Error('Google access token missing');return t.access_token}
+async function accessToken(db,{fetchImpl=googleFetch}={}){const conn=db.prepare('SELECT * FROM google_calendar_connection WHERE id=1').get();if(!conn)throw Error('Google Calendar is not connected');const c=conf();const t=await jsonFetch(oauth.token,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({client_id:c.clientId,client_secret:c.clientSecret,refresh_token:decrypt(conn.encrypted_refresh_token),grant_type:'refresh_token'})},fetchImpl);if(!t.access_token)throw Error('Google access token missing');return t.access_token}
 function appointmentRecord(db,id){return db.prepare('SELECT a.*,c.name customer_name FROM shop_appointments a LEFT JOIN customers c ON c.id=a.customer_id WHERE a.id=?').get(Number(id));}
 function appointmentEvent(a){return {summary:a.title,description:[a.customer_name&&`Customer: ${a.customer_name}`,`Owner Tracker appointment ${a.id}`,a.notes].filter(Boolean).join('\n'),start:{dateTime:a.starts_at,timeZone:'America/Phoenix'},end:{dateTime:a.ends_at,timeZone:'America/Phoenix'},extendedProperties:{private:{ownerTrackerAppointmentId:String(a.id)}}};}
 function fingerprint(a){return digest(JSON.stringify({event:appointmentEvent(a),status:a.status}));}
@@ -74,7 +75,7 @@ function savedSync(db,a,eventId,remote,status='synced'){
 async function calendarRequest(fetchImpl,url,init){return fetchImpl(url,{...init,signal:AbortSignal.timeout(12000)});}
 async function bodyJson(response){return response.json().catch(()=>({}));}
 
-async function performSyncAppointmentChange(db,appointment,{fetchImpl=globalThis.fetch,tokenProvider=()=>accessToken(db),allowRemoteEtag=null}={}){
+async function performSyncAppointmentChange(db,appointment,{fetchImpl=googleFetch,tokenProvider=()=>accessToken(db,{fetchImpl}),allowRemoteEtag=null}={}){
  installCalendarVersions(db);
  const a=appointmentRecord(db,typeof appointment==='object'?appointment.id:appointment);if(!a)throw Error('Appointment missing');
  if(!googleStatus(db).connected||!googleCalendarConfig().configured){db.prepare("UPDATE shop_appointments SET sync_status='local_only',sync_error='Google Calendar is disconnected or unconfigured; changes retained locally' WHERE id=?").run(a.id);return {synced:false,status:'local_only',notice:'Changes saved locally; Google Calendar is not connected/configured'};}
@@ -108,7 +109,7 @@ export async function syncAppointmentChange(db,appointment,options={}){
  try{return await performSyncAppointmentChange(db,appointment,options);}catch(error){const id=typeof appointment==='object'?appointment.id:appointment;markSyncFailed(db,id,error.message);throw error;}
 }
 
-async function insertAppointment(db,a,{fetchImpl=globalThis.fetch,tokenProvider=()=>accessToken(db)}={}){
+async function insertAppointment(db,a,{fetchImpl=googleFetch,tokenProvider=()=>accessToken(db,{fetchImpl})}={}){
  const token=await tokenProvider(),eventId='ot'+digest('AZJETSKI_OWNERTRACKER_CAL_EVENT_'+a.id).slice(0,38),event={id:eventId,...appointmentEvent(a)};
  const response=await calendarRequest(fetchImpl,oauth.events+'?sendUpdates=none',{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},body:JSON.stringify(event)});
  let result=await bodyJson(response);
@@ -123,7 +124,7 @@ async function insertAppointment(db,a,{fetchImpl=globalThis.fetch,tokenProvider=
 
 export async function pushAppointment(db,id,options={}){return syncAppointmentChange(db,id,options);}
 
-export async function resolveAppointmentConflict(db,id,{decision,expectedRemoteEtag,reason,user,fetchImpl=globalThis.fetch,tokenProvider=()=>accessToken(db)}={}){
+export async function resolveAppointmentConflict(db,id,{decision,expectedRemoteEtag,reason,user,fetchImpl=googleFetch,tokenProvider=()=>accessToken(db,{fetchImpl})}={}){
  installCalendarVersions(db);
  if(!user||!['owner','manager'].includes(user.role))throw Object.assign(Error('Owner/manager calendar review required'),{status:403});
  if(!['apply_local','adopt_remote'].includes(decision)||String(reason||'').trim().length<5||!expectedRemoteEtag)throw Object.assign(Error('Reviewed Google version, resolution choice and reason required'),{status:400});

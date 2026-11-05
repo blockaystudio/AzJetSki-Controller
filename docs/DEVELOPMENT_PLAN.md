@@ -1,26 +1,32 @@
 # Active shop development plan
 
-Updated 2026-10-26. Scope: one AZ Jet Ski shop, with equal priority for repair service and counter parts sales. Use [PROJECT_STATE.md](PROJECT_STATE.md) for the latest verified commit and runtime details. The [original assessment](PROJECT_ASSESSMENT_2026-10-26.md) preserves findings and full acceptance criteria.
+Updated 2026-11-05. One AZ Jet Ski shop; repairs and counter parts sales have equal priority. Use PROJECT_STATE.md for current status and bounded handoffs for implementation evidence.
 
-| Work | Status | Completion evidence / next gate |
+| Work | Status | Next gate |
 | --- | --- | --- |
-| Correctness foundation | Verified in preview.2 | Customer isolation, atomic finance, invoice retry/revision rules, stock linkage, custody, reminders and uncertain delivery; regressions and independent review |
-| Shared navigation and visual foundation | Verified in preview.2; extended in preview.3 | Equal repair/counter entry points, contrast, mobile layout, keyboard focus and reduced motion |
-| Guided repair intake and job workspace | Verified locally in preview.3 | New/existing customer, multiple units, check-in, six tabs, unsaved drafts, deep links, retained approval and documents |
-| Shared repair/counter accounts | Verified locally in preview.3 | Invoice revisions, split tender, original-payment refunds, credits, returns, daily close; stale date and invoice-return selection guards fixed |
-| Special-order fulfillment | Implemented; final integrated verification passed | Partial quantities, invoice-linked allocation, retry recovery, payment/quantity pickup gates and return history tested; legacy and pre-pickup returns require reconciliation |
-| Permanent server preparation | Implemented; local container verification passed | Private generated configuration, Node 22, persistent SQLite/photos/backups, Caddy, restart and encrypted restore |
-| Actual server provisioning | Needs hosting account and domain | Owner confirmed a new server is required; no provider/account/domain has been selected or provisioned |
-| Shop pilot | Pending after permanent host | Staff accounts, reconciled starting records, offsite backup/restore, Windows and phone walkthroughs, selected peripherals/provider acceptance |
+| Correctness, navigation and visual foundation | Verified in previews.2–3 | Actual shop device acceptance |
+| Repair intake, job workspace and retained approvals | Verified | Actual staff walkthrough through pickup |
+| Shared repair/counter accounting and special orders | Verified | Terminal/bank/drawer reconciliation on shop devices |
+| Desktop POS and Calendar shortcuts | Implemented in preview.4 | Install current software on actual Windows register |
+| Scheduling customer creation and directory search | Implemented | Owner workflow acceptance |
+| Recovered customer directory and receipt history | Implemented; privately installed | Review exceptions; keep history read-only and reconcile active stock/prices/balances separately |
+| Calendar transport and explicit sync | Verified in preview.6 | Owner Google consent and explicit provider sync acceptance remain required |
+| Historical search/history pagination | Verified in preview.6 | Every matching record reachable; customer/query scopes and mobile paging pass |
+| Permanent Linux server package | Local container/recovery verification passed | Hosting account and owned domain still needed |
+| Permanent server provisioning | Pending owner setup | Provision selected host; public HTTPS, restart persistence, stable OAuth callback and offsite restore |
+| Shop pilot | Pending acceptance | Named staff, reconciled starting records, Windows/phone/peripherals and selected live providers |
 
 ## Delivery order
 
-1. Completed: preview.3 corrections published to GitHub and the private review site. Application, browser, Linux recovery, launcher and Windows install/rollback CI passed for `0d3dbad`.
-2. Use the tested [server deployment guide](SERVER_DEPLOYMENT.md) to provision the selected host after account/domain details are available. Verify actual public HTTPS, external health, restart persistence and offsite restoration.
-3. Run a fictional shop walkthrough on the actual devices, then a controlled real-record pilot with reconciled payments, stock, approvals and pickup. Expand only after those records balance.
+1. Preview.6 local checks passed: 307 tests/subtests, 111 syntax files, legacy HTTP regressions and shop/history browser journeys. Publish the verified source and desktop package; refresh the existing owner-private review while preserving private credentials and imported data.
+2. Complete Google consent from the app's Calendar. Explicitly sync and confirm a fictional appointment before customer scheduling.
+3. Provision the selected permanent server using SERVER_DEPLOYMENT.md once the account/domain is available.
+4. Run the device/peripheral walkthrough and encrypted offsite recovery. Begin a controlled shop pilot after starting data and payments balance.
 
-Record only proven outcomes as complete. Manual terminal references and manual supplier ordering are valid initial workflows. Automated merchant charging, unattended dealer purchasing and signed native iOS distribution remain optional future work.
+Record proven outcomes only. Manual terminal references and supplier ordering are valid initial workflows. Automated merchant charging, unattended purchasing and native iOS signing remain optional.
 
 ## Durable context
 
-GitHub contains source, tests, this plan and bounded handoffs under `docs/handoffs/`. The existing [Drive folder](https://drive.google.com/drive/folders/1SMdizJKuDJaa7AXDfuCZGL0BBI5FJyUp) holds readable snapshots of this plan, the compact checkpoint and the latest milestone. Update those existing files; exclude credentials, customer data and backup archives.
+GitHub stores source, tests, this plan and concise handoffs. Update the existing Drive planning folder and existing checkpoint/plan files after verified milestones; do not duplicate folders. Planning snapshots must exclude credentials, customer records, private recovery identifiers and financial reconciliation details.
+
+Existing folder: https://drive.google.com/drive/folders/1SMdizJKuDJaa7AXDfuCZGL0BBI5FJyUp . File identifiers are recorded in PROJECT_STATE.md.

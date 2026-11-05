@@ -64,7 +64,9 @@ jobs:
         env:
           OWNERTRACKER_NODE: node
           OWNERTRACKER_BROWSER_ARTIFACTS: ${{ runner.temp }}/ownertracker-browser
-        run: python Windows-Server/test/browser-shop.py
+        run: |
+          python Windows-Server/test/browser-shop.py
+          python Windows-Server/test/browser-legacy.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:

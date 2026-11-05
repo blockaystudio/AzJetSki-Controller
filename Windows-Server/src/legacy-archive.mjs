@@ -13,14 +13,27 @@ export function legacyArchiveRoutes({currentUser,json,archivePath=process.env.OW
   try{
    db=new DatabaseSync(path.resolve(archivePath),{readOnly:true});db.exec('PRAGMA query_only=ON');
    const url=new URL(req.url,'http://local'),q=String(url.searchParams.get('q')||'').trim().slice(0,180),like='%'+q+'%';
+   const paginated=(countSql,rowsSql,args)=>{
+    const input=url.searchParams.get('page')??'1';
+    if(!/^[1-9]\d{0,5}$/.test(input))return send(400,{error:'Archive page must be a whole number from 1 to 999999'});
+    const total=db.prepare(countSql).get(...args).total,pageSize=50,pageCount=Math.max(1,Math.ceil(total/pageSize)),page=Math.min(Number(input),pageCount);
+    return {rows:db.prepare(rowsSql+' LIMIT ? OFFSET ?').all(...args,pageSize,(page-1)*pageSize),pagination:{page,pageSize,total,pageCount}};
+   };
    if(p==='/api/legacy/status')return send(200,{configured:true,customers:db.prepare('SELECT COUNT(*) n FROM customers').get().n,receipts:db.prepare('SELECT COUNT(*) n FROM sales_receipts').get().n,items:db.prepare('SELECT COUNT(*) n FROM receipt_line_items').get().n});
-   if(p==='/api/legacy/customers')return send(200,{configured:true,customers:db.prepare('SELECT ListID,FullName,Phone,EMail,BillAddress_Street,BillAddress_City,BillAddress_State,BillAddress_PostalCode FROM customers WHERE FullName LIKE ? OR Phone LIKE ? OR EMail LIKE ? ORDER BY FullName LIMIT 50').all(like,like,like)});
+   if(p==='/api/legacy/customers'){
+    const where='FullName LIKE ? OR Phone LIKE ? OR EMail LIKE ?',args=[like,like,like];
+    const result=paginated('SELECT COUNT(*) total FROM customers WHERE '+where,'SELECT ListID,FullName,Phone,EMail,BillAddress_Street,BillAddress_City,BillAddress_State,BillAddress_PostalCode FROM customers WHERE '+where+' ORDER BY FullName COLLATE NOCASE,ListID',args);
+    if(result===true)return true;
+    return send(200,{configured:true,customers:result.rows,pagination:result.pagination});
+   }
    if(p==='/api/legacy/receipts'){
     const customer=url.searchParams.get('customerId');
     const where=customer?'r.CustomerListID=?':`(r.SalesReceiptNumber LIKE ? OR r.TxnDate LIKE ? OR c.FullName LIKE ? OR c.Phone LIKE ? OR EXISTS(SELECT 1 FROM receipt_line_items i WHERE i.ReceiptTxnID=r.TxnID AND (i.Desc1 LIKE ? OR i.Desc2 LIKE ? OR i.ALU LIKE ? OR i.ItemNumber LIKE ?)))`;
     const args=customer?[customer]:Array(8).fill(like);
-    const receipts=db.prepare(`SELECT r.TxnID,r.SalesReceiptNumber,r.TxnDate,r.CustomerListID,r.SalesReceiptType,r.Total,r.TaxAmount,c.FullName customer_name FROM sales_receipts r LEFT JOIN customers c ON c.ListID=r.CustomerListID WHERE ${where} ORDER BY r.TxnDate DESC,r.TxnID LIMIT 50`).all(...args);
-    return send(200,{configured:true,receipts});
+    const from=`FROM sales_receipts r LEFT JOIN customers c ON c.ListID=r.CustomerListID WHERE ${where}`;
+    const result=paginated('SELECT COUNT(*) total '+from,`SELECT r.TxnID,r.SalesReceiptNumber,r.TxnDate,r.CustomerListID,r.SalesReceiptType,r.Total,r.TaxAmount,c.FullName customer_name ${from} ORDER BY r.TxnDate DESC,r.TxnID`,args);
+    if(result===true)return true;
+    return send(200,{configured:true,receipts:result.rows,pagination:result.pagination});
    }
    const match=p.match(/^\/api\/legacy\/receipts\/([^/]+)$/);
    if(match){const id=decodeURIComponent(match[1]),receipt=db.prepare('SELECT TxnID,SalesReceiptNumber,TxnDate,CustomerListID,SalesReceiptType,Total,Subtotal,TaxAmount,Discount,Comments,TenderType,ItemsCount FROM sales_receipts WHERE TxnID=?').get(id);if(!receipt)return send(404,{error:'Historical receipt not found'});return send(200,{configured:true,receipt,customer:db.prepare('SELECT ListID,FullName,Phone,EMail,BillAddress_Street,BillAddress_City,BillAddress_State,BillAddress_PostalCode FROM customers WHERE ListID=?').get(receipt.CustomerListID)||null,items:db.prepare('SELECT ReceiptTxnID,LineNumber,ItemNumber,Desc1,Desc2,Qty,Price,ExtendedPrice,TaxAmount,ALU FROM receipt_line_items WHERE ReceiptTxnID=? ORDER BY rowid').all(id),tenders:db.prepare('SELECT ReceiptTxnID,TenderKind,TenderAmount,TipAmount,CardName,CheckNumber FROM receipt_tenders WHERE ReceiptTxnID=? ORDER BY rowid').all(id),notice:'Reconstructed historical receipt from recovered POS data. Payment details reflect only the recovered export; this view creates no current sale, charge or stock movement.'});}

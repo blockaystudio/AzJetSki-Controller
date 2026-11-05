@@ -2,3 +2,39 @@ import test from 'node:test';import assert from 'node:assert/strict';import fs f
 function setup(t){const folder=fs.mkdtempSync(path.join(os.tmpdir(),'legacy-archive-')),file=path.join(folder,'archive.sqlite');t.after(()=>fs.rmSync(folder,{recursive:true,force:true}));const db=new DatabaseSync(file);db.exec(`CREATE TABLE customers(ListID TEXT,FullName TEXT,Phone TEXT,EMail TEXT,BillAddress_Street TEXT,BillAddress_City TEXT,BillAddress_State TEXT,BillAddress_PostalCode TEXT);CREATE TABLE sales_receipts(TxnID TEXT,SalesReceiptNumber TEXT,TxnDate TEXT,CustomerListID TEXT,SalesReceiptType TEXT,Total TEXT,Subtotal TEXT,TaxAmount TEXT,Discount TEXT,Comments TEXT,TenderType TEXT,ItemsCount TEXT,PrivateCardNumber TEXT);CREATE TABLE receipt_line_items(ReceiptTxnID TEXT,LineNumber TEXT,ItemNumber TEXT,Desc1 TEXT,Desc2 TEXT,Qty TEXT,Price TEXT,ExtendedPrice TEXT,TaxAmount TEXT,ALU TEXT);CREATE TABLE receipt_tenders(ReceiptTxnID TEXT,TenderKind TEXT,TenderAmount TEXT,TipAmount TEXT,CardName TEXT,CheckNumber TEXT,PrivateCardNumber TEXT);INSERT INTO customers VALUES('000-C','Fictional Customer','555-0101','fake@example.test','','','','');INSERT INTO sales_receipts(TxnID,SalesReceiptNumber,TxnDate,CustomerListID,SalesReceiptType,Total,PrivateCardNumber) VALUES('000-T1','123','2007-07-31','000-C','Sale','10.00','never-expose'),('000-T2','123','2008-01-01','','Return','-5.00','never-expose');INSERT INTO receipt_line_items(ReceiptTxnID,Desc1,Qty,ALU) VALUES('000-T1','Impeller','1','SKU-001');INSERT INTO receipt_tenders(ReceiptTxnID,TenderKind,TenderAmount,PrivateCardNumber) VALUES('000-T1','Cash','10.00','never-expose');`);db.close();let user={role:'owner'};const route=legacyArchiveRoutes({archivePath:file,currentUser:()=>user,json:(res,status,body)=>Object.assign(res,{status,body})});const call=async(url,method='GET')=>{const res={};assert.equal(await route({url,method},{...res},'/unrelated'),false);await route({url,method},res,new URL(url,'http://local').pathname);return res;};return {file,call,setUser:u=>user=u};}
 test('archive preserves IDs, walk-ins and duplicate receipt numbers; returns exact receipt items and limited tenders without changing source',async t=>{const f=setup(t),hash=()=>crypto.createHash('sha256').update(fs.readFileSync(f.file)).digest('hex'),before=hash();assert.equal((await f.call('/api/legacy/status')).body.receipts,2);assert.equal((await f.call('/api/legacy/customers?q=555')).body.customers[0].ListID,'000-C');assert.equal((await f.call('/api/legacy/receipts?q=SKU-001')).body.receipts.length,1);assert.equal((await f.call('/api/legacy/receipts?customerId=000-C')).body.receipts.length,1);const first=(await f.call('/api/legacy/receipts/000-T1')).body;assert.equal(first.receipt.TxnID,'000-T1');assert.equal(first.items[0].ALU,'SKU-001');assert.equal(first.tenders.length,1);assert.ok(!JSON.stringify(first).includes('never-expose'));assert.equal((await f.call('/api/legacy/receipts/000-T2')).body.customer,null);assert.equal((await f.call('/api/legacy/receipts?q='+encodeURIComponent("' OR 1=1 --"))).body.receipts.length,0);assert.equal(hash(),before);});
 test('archive denies unauthenticated, technician and write requests; missing records fail and unconfigured archive is truthful',async t=>{const f=setup(t);f.setUser(null);assert.equal((await f.call('/api/legacy/status')).status,401);f.setUser({role:'technician'});assert.equal((await f.call('/api/legacy/status')).status,403);f.setUser({role:'owner'});assert.equal((await f.call('/api/legacy/status','POST')).status,405);assert.equal((await f.call('/api/legacy/receipts/missing')).status,404);const route=legacyArchiveRoutes({archivePath:'',currentUser:()=>({role:'owner'}),json:(res,status,body)=>Object.assign(res,{status,body})}),r={};await route({url:'/api/legacy/status',method:'GET'},r,'/api/legacy/status');assert.equal(r.body.configured,false);});
+test('archive pages expose every matching customer and receipt with stable IDs and preserve customer history scope without writes',async t=>{
+ const f=setup(t),db=new DatabaseSync(f.file);
+ const customer=db.prepare('INSERT INTO customers(ListID,FullName) VALUES(?,?)'),receipt=db.prepare('INSERT INTO sales_receipts(TxnID,SalesReceiptNumber,TxnDate,CustomerListID) VALUES(?,?,?,?)');
+ for(let i=0;i<106;i++){
+  const suffix=String(i).padStart(3,'0');
+  customer.run('PAGE-C-'+suffix,'Paging customer');
+  receipt.run('PAGE-T-'+suffix,'PAGED-RECEIPT-'+suffix,'2009-01-01','000-C');
+ }
+ db.close();
+ const hash=()=>crypto.createHash('sha256').update(fs.readFileSync(f.file)).digest('hex'),before=hash();
+ for(const [query,key,id,total] of [
+  ['/api/legacy/customers?q=Paging','customers','ListID',106],
+  ['/api/legacy/receipts?q=PAGED-RECEIPT','receipts','TxnID',106],
+  ['/api/legacy/receipts?customerId=000-C','receipts','TxnID',107]
+ ]){
+  const ids=[];
+  for(let page=1;page<=3;page++){
+   const response=await f.call(query+'&page='+page);assert.equal(response.status,200);
+   const body=response.body;
+   assert.deepEqual(body.pagination,{page,pageSize:50,total,pageCount:3});
+   assert.equal(body[key].length,page<3?50:total-100);
+   ids.push(...body[key].map(row=>row[id]));
+   if(query.includes('customerId'))assert.ok(body.receipts.every(row=>row.CustomerListID==='000-C'));
+  }
+  assert.equal(new Set(ids).size,total);
+  assert.deepEqual(ids.slice(0,106),Array.from({length:106},(_,i)=>(key==='customers'?'PAGE-C-':'PAGE-T-')+String(i).padStart(3,'0')));
+  const last=(await f.call(query+'&page=999999')).body;
+  assert.equal(last.pagination.page,3);assert.deepEqual(last[key].map(row=>row[id]),ids.slice(100));
+ }
+ const empty=(await f.call('/api/legacy/receipts?q=unmatched-fictional-query&page=4')).body;
+ assert.deepEqual(empty.pagination,{page:1,pageSize:50,total:0,pageCount:1});assert.deepEqual(empty.receipts,[]);
+ for(const page of ['','0','-1','1.5','1000000','1e2',"1 OR 1=1"]){
+  for(const endpoint of ['customers','receipts'])assert.equal((await f.call('/api/legacy/'+endpoint+'?page='+encodeURIComponent(page))).status,400);
+ }
+ assert.equal(hash(),before);
+});

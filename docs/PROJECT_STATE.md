@@ -1,44 +1,51 @@
 # OwnerTracker — compact project checkpoint
 
-Updated 2026-10-26. Read this first; load only the relevant source or handoff.
+Updated 2026-11-05. Read this first; load only the relevant source or bounded handoff. GitHub is authoritative.
 
-Previous follow-up (application b7119ed): preview.4 adds desktop Sales/Calendar entry, scheduling customer creation/search, and private Google OAuth configuration helper. Owner explicitly asked to WAIT for the QuickBooks export, which they will add to Drive. Shared recovery chat is now read; its schema and archive features are incorporated in `/legacy.html` with a staff-only read-only adapter. Actual ZIP and active customer merging remain pending; no real records have been merged. Google OAuth client is not yet created; connection is not active. See `SHOP_DESKTOP_ROLLOUT.md` and `handoffs/desktop_calendar_legacy.md`. Local checks: 277 tests, 104 syntax checks and expanded browser journeys passed. Verified 114-file Windows package: `/workspace/OwnerTracker-Desktop-preview4.zip`; launcher rebuilt and review refreshed.
+## Goal and current application
 
-Preview.5 adds a transactional legacy-customer importer with original-ID links, collision detection and replay protection, plus customer-history links and counter-sale directory search. Private migration completion records stay outside GitHub. OAuth setup still requires the downloaded client JSON and owner consent. Tests:280/subtests,108syntax and isolated browser journeys passed.
+- One AZ Jet Ski shop, with equal priority for repair service and counter parts sales.
+- Repository: https://github.com/blockaystudio/AzJetSki-Controller (main).
+- Preview.5 baseline: desktop Sales/Calendar shortcuts, scheduling customer creation/search, read-only recovered receipt archive, transactional customer importer and immutable original-ID history links.
+- Preview.6 verified: proxy-aware Google OAuth/API transport, explicit local appointment save, and pagination through all historical customer/receipt results. 307 tests/subtests, 111 syntax files and the repair/retail/scheduling plus legacy-pagination browser checks passed.
+- Owner-provided OAuth configuration is installed privately in review; owner Google consent remains pending. Drive connection does not authorize Calendar. No credentials belong in source, handoffs or planning snapshots.
+- Recovered customers and the historical archive are installed privately. Detailed reconciliation, source files and recovery identifiers stay outside GitHub. Active inventory/prices/opening balances still require reconciliation.
 
-## Goal and decisions
+## Completed foundation
 
-- One AZ Jet Ski shop; repairs and counter parts sales have equal priority.
-- Source: https://github.com/blockaystudio/AzJetSki-Controller (main).
-- Preview.2 completed assessment A01–A15 fixes and contrast/navigation foundation; see `CORRECTIONS_2026-10-26.md`.
-- Preview.3 implements guided intake, six job tabs, shared repair/retail accounts, retained invoice documents, quantity-based special-order receiving, scoped refunds/returns and daily-close date guards. Milestone published and private review refreshed. Next: select/provision the permanent host and run shop acceptance.
-- Owner explicitly needs a NEW server. Linux package is tested; hosting account and owned domain remain unanswered prerequisites. No cloud host, DNS or public certificate provisioned.
-- Preserve customer isolation, approvals, financial/stock audit history and backups. Test only fictional disposable records. Automated charging/dealer checkout and signed native iOS remain optional/deferred.
+- Preview.2: assessment A01–A15 correctness fixes, contrast and navigation; see CORRECTIONS_2026-10-26.md.
+- Preview.3: guided repair intake, six job tabs, shared repair/counter accounts, retained signed/revised approvals and invoice documents, scoped credits/refunds/returns, daily-close guards, quantity-based special-order receiving and pickup gates.
+- Legacy status-only fulfillment and physical returns before pickup require reconciliation. Do not invent stock receipts, infer missing customer links or repeat supplier purchases.
+- Permanent Linux package: generated private configuration, Node 22, non-root/read-only application, Caddy, persistent data/photos, encrypted backup/restore. Disposable Compose and Windows install/rollback CI passed. No permanent host, DNS or public certificate has been provisioned.
+
+## Verification and working rules
+
+- Preview.6: 307 application tests/subtests, 111 syntax files and V6/V8/V9/V10/V11 HTTP regressions passed. Full disposable shop browser journeys and the new archive paging browser check passed. Google public sign-in metadata returned HTTPS 200 through the proxy without credentials. See handoffs/calendar_history_preview6.md.
+- Browser foundation covers repair intake through retained approval/payment/pickup, counter split tenders, partial supplier receiving/retry, payment/quantity gates, original-sale return/refund and combined close; 390/768/1440 widths and selected contrast checks passed.
+- Use only disposable fictional databases for tests. Never mutate the imported review database or live providers as test fixtures.
+- Supported Node 22.16+ within 22.x. Available binary: /home/agent/.npm/_npx/52027bd8fc0022aa/node_modules/node/bin/node.
+- Coordinate file ownership across agents. Keep handoffs concise under docs/handoffs/; do not repeatedly load old plans or conversation history.
+
+## Runtime and delivery
+
+- Owner-private review: https://azjetski-ownertracker-review.wholeclock.chatgpt.site ; desktop /desktop.html ; Calendar /shop-ops.html?tab=schedule.
+- Runtime is separate from source. Preserve private configuration, database, uploads, retained documents and backups on every update. The managed workspace must remain active.
+- Review app uses a managed Docker container with a private loopback port. The Site bridge takes credentials through hidden stdin; restarting the container requires bridge reinjection. Review hosting is temporary, not the permanent shop server.
+- Keep software releases free of real data/credentials. Install private data recovery separately; preserve original-ID mappings and the private archive path.
+
+## Pending work and next gates
+
+1. Preview.6 verified locally; complete GitHub publication, private review refresh and desktop packaging. See the release follow-up for resulting commit and download.
+2. Owner completes Google consent from Calendar; verify explicit sync with a fictional appointment after approval.
+3. Select hosting account and owned domain, provision using SERVER_DEPLOYMENT.md and establish stable HTTPS/callback.
+4. Reconcile active starting inventory/prices/balances, review migration exceptions and create named staff accounts.
+5. Actual register/phone/printer/drawer/barcode walkthrough, bank/terminal reconciliation, restart persistence and encrypted offsite restore.
+
+Manual terminal references and supplier ordering are supported initial workflows. Automated merchant charging, unattended purchasing and signed native iOS remain optional; do not mark owner/provider/device acceptance complete from automated tests.
 
 ## Read next
 
-- Active [plan](DEVELOPMENT_PLAN.md); original [assessment](PROJECT_ASSESSMENT_2026-10-26.md); current [milestone](WORKSPACE_MILESTONE_2026-10-26.md); [server guide](SERVER_DEPLOYMENT.md).
-- Relevant bounded handoffs: guided_intake, job_workspace, account_workspace, animator_phase3, phase3_documents, phase4_retail_fulfillment, phase3_browser, server_preparation under `handoffs/`. Do not load them all by default.
-- App: `Windows-Server/src/server.mjs`; UI: `Windows-Server/public/`.
-- Supported Node 22.16+ within 22.x. Current binary: `/home/agent/.npm/_npx/52027bd8fc0022aa/node_modules/node/bin/node` (verify on resumption).
-
-## Verification
-
-- Preview.3 local: 273 application tests/subtests, 97 JS syntax checks, all V6/V8/V9/V10/V11 HTTP regressions and 6 bridge tests passed.
-- Chromium: intake/recovery, job navigation/draft/race guards, invoice revisions, signed/revised approval, final repair payment/pickup retaining the second unit in custody, counter sale, partial supplier receipt/retry, payment/quantity pickup gates, stock return/original-payment refund and combined close. Final exact-source rerun passed; all 75 copied application file hashes matched current source, with 70 screenshots.
-- 390/768/1440 layouts, reduced motion, keyboard and selected contrast checks (8.01–15.17) pass. Durable evidence under `docs/evidence/`; browser handoff records full artifacts.
-- Sol Ultra + independent financial review corrected premature release, missing stock linkage, completed-order repurchasing, pre-pickup return ambiguity and cross-operation stock key reuse.
-- Disposable Docker: non-root/read-only app, private port, Caddy, SQLite/photo restart persistence, encrypted backup/restore and recovery copy passed. Repeatable `test/server-deployment-smoke.py` now runs in CI. Public TLS/host reboot/offsite recovery remain host acceptance.
-
-## Runtime and upgrade
-
-- Review: https://azjetski-ownertracker-review.wholeclock.chatgpt.site
-- Runtime: `/workspace/ownertracker-review-runtime/Windows-Server`; preserve .env/data/photos/settings. Updated to preview.3 and verified over HTTPS; all 74 source files match the published app. Twelve existing business table counts are unchanged. Pre-update backup: `backups/ownertracker-CVxAnt`.
-- Bridge instructions and registered Site ID: `review-hosting/README.md`, `review-hosting/.openai/hosting.json`. Credentials stay in session/runtime storage. Review requires the workspace server.
-- Legacy status-only fulfillment and physical returns before pickup require reconciliation; do not invent receipts or repeat supplier purchases. Split packing-document/SKU allocations require distinct documented references. Generic stock receiving does not automatically fulfill special orders.
-- Published application commit: `0d3dbad268dc99e3535f02ce84d3164dd9a11c5a`. [App/browser/Linux recovery/launcher CI](https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40402146084) and [Windows install/rollback](https://github.com/blockaystudio/AzJetSki-Controller/actions/runs/40402146116) passed. Later documentation-only commits do not change this application.
-- Portable outputs: `/workspace/OwnerTracker-preview3-release` (106 verified files), `/workspace/OwnerTracker-V11-preview3.zip`, and `/workspace/OwnerTracker-V11-preview3.git.bundle`. Source/runtime remain separate.
-- Remaining shop gates: host/account/domain, staff accounts, reconciled starting data, offsite restore, actual Windows/phone/peripherals and selected live providers.
+Active DEVELOPMENT_PLAN.md; SHOP_DESKTOP_ROLLOUT.md; SERVER_DEPLOYMENT.md. Relevant handoffs: legacy_import, desktop_calendar_legacy, account_workspace, phase4_retail_fulfillment, phase3_browser and server_preparation. Older handoffs describe their historical milestone; prefer this checkpoint and current source for status.
 
 ## Durable storage
 

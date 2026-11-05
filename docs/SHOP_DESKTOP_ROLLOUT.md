@@ -1,37 +1,37 @@
 # Shop desktop and scheduling rollout
 
-The Windows launcher now opens `/desktop.html`, with direct Sales / POS, Calendar, Customers / Units, Repairs and document/account access. The new scheduling customer form creates a directory customer and selects it in the appointment without creating a vehicle/job. Search uses the directory endpoint, including customers outside the initial 500-record list. An uncertain customer save blocks repeat creation until staff check the directory. Existing appointment inputs remain intact.
+Updated 2026-11-05. Shop Desktop opens directly from the Windows launcher, with Sales / POS, Calendar, Customers / Units, Repairs, Accounts and Previous POS History shortcuts. Scheduling supports directory search and customer creation without requiring a vehicle or repair job.
 
-## Google Calendar — setup pending
+## Google Calendar
 
-Target account: jetskiarizona@gmail.com. No client ID, client secret, redirect URL or encryption key was present in the inspected app/review configuration. No Google connection has been completed. There is no connected Google Cloud provisioning or authenticated browser capability in this session to create an OAuth client on the owner's behalf.
+Target account: jetskiarizona@gmail.com. The owner-supplied OAuth configuration has been installed privately in the review runtime. Owner Google consent is still pending. Drive account access and Calendar authorization are separate connections.
 
-1. In the shop's Google Cloud project, enable Google Calendar API, configure OAuth consent and create a Web application OAuth client. Add the account as a test user if using Testing; Google Testing refresh tokens can expire after seven days. Complete Google's publishing requirements for continued use.
-2. Register the exact HTTPS callback of the actual shop server: `https://YOUR_SHOP_HOST/api/shop/google-calendar/callback`. It must route to the same database/server used by the desktop. A different review server cannot complete OAuth for the local Windows installation.
-3. Download the client JSON privately. In the installed application directory, run `node scripts/configure-google-calendar.mjs /private/path/client.json`. It preserves other .env settings, validates the registered callback, generates an encryption key if absent, prints no credentials, and refuses to replace configured credentials. Do not commit or share the JSON/.env.
-4. Restart the shop server. Sign in as owner/manager, open Calendar, choose Connect Google Calendar and approve as jetskiarizona@gmail.com. The OAuth request hints this account; the callback enforces the verified email.
-5. Save and explicitly sync a fictional appointment. Confirm its Google outcome. Integration sends shop appointments to the primary Google calendar; arbitrary existing Google events are not imported. Appointments remain local until explicitly synced.
+Open Calendar, choose **Connect Google Calendar**, sign in as the target account and approve. Saving an appointment is local; **Sync to Google** explicitly publishes it. Once linked, rescheduling or cancelling the appointment updates its existing Google event with version/conflict protection. Existing unrelated Google events are not imported.
 
-The app's Calendar setup link shows the callback for the current origin. The workspace review is temporary; store deployment needs a stable address or the local-only scheduling workflow until that is available.
+For a separate Windows or permanent server installation:
 
-## QuickBooks migration — explicitly waiting for owner upload
+1. Enable Google Calendar API in the shop Google Cloud project, configure consent and create a Web application OAuth client. During Testing, add the shop account as a test user; refresh tokens may expire after seven days. Complete Google's publishing requirements for continued use.
+2. Register the exact callback `https://YOUR_SHOP_HOST/api/shop/google-calendar/callback`. The callback must reach the same application database used by the desktop.
+3. Keep the downloaded client JSON private. In the application directory, run `node scripts/configure-google-calendar.mjs /private/path/client.json`. This preserves other settings, validates the callback and generates a private encryption key. It refuses to replace existing credentials.
+4. Restart the server, connect from Calendar and approve using the target account. Explicitly sync a fictional appointment and confirm the Google outcome before customer scheduling.
 
-The owner will add the extracted old POS data to Drive and provide its location. Do not substitute unrelated files, infer receipts from work orders, or seed fabricated records. No legacy records have been imported in this milestone.
+The temporary review address depends on the managed workspace. The permanent server needs a stable HTTPS address. A different callback or installation requires its own correct configuration; credentials are excluded from software downloads and GitHub.
 
-After the export arrives: identify its schema and version; stage a private copy; count customers/transactions and reconcile receipt/payment/tax totals; map persistent external IDs and possible customer duplicates; preserve historical receipt numbers/dates/items/tax/tenders/refunds; run a dry import and duplicate replay check on a disposable database; review exceptions; back up the chosen shop database/photos; apply the reviewed mapping there. Historical receipts must not create new receivables, card charges, stock issues or customer notifications. Keep raw exports and real customer data out of GitHub and the fictional review.
+## Recovered POS data
 
-## Store opening gate
+The recovered archive adapter preserves original customer and transaction IDs, historical receipts, line items, tax and tenders. The customer importer creates active customer profiles with immutable original-ID links, a full pre-import backup, collision checks and replay protection. Exact replays preserve subsequent staff edits. Detailed migration evidence and recovery copies remain private.
 
-Install the updated Windows package with Node 22; preserve existing .env/data on upgrades. Use named employee accounts. On the actual register, walk through a fictional cash/card-reference sale, split tender, pending Zelle confirmation, receipt print and return, check the drawer/printer and restart persistence, then reconcile starting stock and customer/receipt counts after migration. Card entries record existing terminal transactions; they do not charge a card. Keep an encrypted backup and an external recovery copy.
+The private review has the recovered customer directory and historical archive installed. Historical receipt searches and customer purchase history are read-only. They create no current debt, charge, refund, stock movement or notification. Inventory, prices and opening balances require separate reconciliation before becoming active shop data. Do not infer missing customer associations or replay old receipts as new sales.
 
-Tomorrow's availability depends on receiving/reconciling the legacy export and completing the actual Windows/peripheral walkthrough. Neither data completeness nor the Google connection is represented as ready yet.
+Install the current software package separately from the private data restore. The public ZIP contains application code only. Preserve `.env`, data, photos, original-ID mappings and archive paths on updates. Keep real source files, backups and credentials out of GitHub and planning snapshots.
 
-## Shared recovery chat incorporated
+## Store acceptance still required
 
-Source supplied by owner: https://chatgpt.com/share/6adc74ab-2190-83e8-a5ea-f6166eca32a7
+- Select the permanent hosting account and owned domain; provision the tested server package and stable HTTPS callback.
+- Complete owner Calendar consent and an explicit sync check.
+- Set up named staff accounts and review permissions on the actual register.
+- Reconcile starting inventory/prices/balances and review migration exceptions without guessing missing links.
+- Walk through a fictional cash/card-reference sale, split tender, pending Zelle confirmation, receipt print, return, repair approval and pickup on actual Windows/phone devices. Card entries record terminal transactions; they do not charge cards.
+- Confirm drawer/printer/barcode behavior, restart persistence and a restore from an encrypted offsite copy with its separately held key.
 
-The shared chat reports a completed recovery ZIP named `AZJetSki_POS6_COMPLETE_RECOVERY_2026-10-17.zip` with `QBPOS6_Searchable_Archive.sqlite`, customers.csv, sales_receipts.csv, receipt_line_items.csv, receipt_tenders.csv, inventory.csv, customer workbook and an offline printable receipt browser. Reported counts: 10,170 customers; 35,310 receipts; 91,583 items; 33,939 tenders; 23,179 inventory records. These are prior-chat claims until this session obtains and reconciles the actual files. Exceptions reported: 3,901 receipts without customer IDs, 19 referencing seven missing customers, and 1,436 lines referencing absent inventory IDs. Preserve these records without guessing associations.
-
-The app now includes `/legacy.html` from Shop Desktop: staff-only historical customer/phone/email lookup, purchase history by original ListID, receipt/date/item/SKU search, exact receipt lookup by TxnID (receipt numbers are not unique), retained items/tax/tenders and reconstructed print/PDF. The adapter reads the source archive with SQLite readOnly/query_only and creates no current sale, stock issue, receivable, refund or customer notification. Returned tender fields exclude raw card numbers. Access is limited to owner/manager/advisor/service writer. `OWNERTRACKER_LEGACY_ARCHIVE` selects a private installed SQLite file after schema/totals review; do not put the archive in public/ or GitHub.
-
-The other chat's sandbox download URLs do not transfer files into this workspace. Owner will add the 29.4 MB recovery ZIP to Drive. The original 354 MiB QPB is discoverable in Drive but is not a substitute for the already-recovered exports. Active customer merging and migration of inventory/pricing still await that reviewed ZIP and an explicit duplicate/external-ID mapping. Original archive customers are not yet inserted into the active scheduling/sales directory.
+Do not record these owner/provider/device checks as complete based only on automated application tests. Manual terminal references and supplier ordering remain supported initial workflows.

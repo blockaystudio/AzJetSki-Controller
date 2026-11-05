@@ -222,8 +222,8 @@ export function shopOpsRoutes({db,currentUser,json,readBody,bridgeToken}){
       const conflict=db.prepare("SELECT id FROM shop_appointments WHERE status='scheduled' AND starts_at<? AND ends_at>? LIMIT 1").get(new Date(end).toISOString(),new Date(start).toISOString());
       const r=db.prepare('INSERT INTO shop_appointments(customer_id,vehicle_id,title,starts_at,ends_at,notes,created_by) VALUES(?,?,?,?,?,?,?)').run(d.customerId?Number(d.customerId):null,d.vehicleId?Number(d.vehicleId):null,title,new Date(start).toISOString(),new Date(end).toISOString(),str(d.notes),u.id);
       const id=Number(r.lastInsertRowid);
-      if(googleStatus(db).connected){try{const sync=await pushAppointment(db,id);return respond(201,{id,possibleOverlap:!!conflict,calendarSync:sync.synced?'synced':sync.status})}catch(e){markSyncFailed(db,id,e.message);return respond(201,{id,possibleOverlap:!!conflict,calendarSync:'error',syncError:e.message})}}
-      return respond(201,{id,possibleOverlap:!!conflict,calendarSync:'not_connected'});
+      // Saving a local appointment never publishes it. Staff explicitly choose Sync to Google.
+      return respond(201,{id,possibleOverlap:!!conflict,calendarSync:googleStatus(db).connected?'local_only':'not_connected'});
     }
     const cal=p.match(/^\/api\/shop\/schedule\/(\d+)\/ics$/);
     if(cal&&req.method==='GET'){
