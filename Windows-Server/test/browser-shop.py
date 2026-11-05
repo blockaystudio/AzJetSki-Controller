@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import time
 import urllib.request
+from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright, expect
 from browser_workspace import run_workspace_journeys, responsive
 from browser_operations import run_operations_journeys
@@ -165,10 +166,14 @@ def run(base):
         # An actual counter sale: scan catalog, issue one stock movement, split tender, pickup.
         visit(page, base, '/shop-ops.html?tab=retail&new=1', '#newRetail')
         api(page, '/api/shop/inventory-adjustments', 'POST', {'sku':'REVIEW-SERVICE-KIT','quantityDelta':3,'reason':'cycle_count','referenceType':'cycle_count','referenceId':'BROWSER-OPENING-COUNT','idempotencyKey':'browser-opening-stock'})
-        existing = {row['id'] for row in api(page, '/api/shop/retail-orders')['orders']}
         customer = api(page, '/api/pos/customers')['customers'][0]
         page.locator('#newRetail [name=customerId]').select_option(str(customer['id']))
-        page.locator('#newRetail button').click()
+        with page.expect_response(lambda response: urlparse(response.url).path == '/api/shop/retail-orders' and response.request.method == 'POST') as created:
+            page.locator('#newRetail button').click()
+        assert created.value.status == 201, created.value.text()
+        order_id = created.value.json()['order']['id']
+        order_path = f'/api/shop/retail-orders/{order_id}'
+        account = page.locator(f'[data-account-workspace][data-scope=retail][data-account-id="{order_id}"]')
         page.locator('#retailAdd').wait_for()
         page.locator('#stockLookup').fill('000000001001')
         page.locator('#lookupStock').click()
@@ -181,29 +186,63 @@ def run(base):
         accept_dialog = lambda dialog: dialog.accept()
         page.on('dialog', accept_dialog)
         page.locator('#issueRetail').click()
-        page.locator('[data-account-workspace][data-scope=retail] [data-account-payment]').wait_for()
-        page.locator('[data-stock-sale]').click()
-        page.locator('[data-status=picked_up]').wait_for()
-        order = next(row for row in api(page, '/api/shop/retail-orders')['orders'] if row['id'] not in existing)
-        for amount, method in [('50.00','cash'), ('59.65','card_dejavoo')]:
-            page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] [name=method]').select_option(method)
-            page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] [name=amount]').fill(amount)
-            page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] [name=reference]').fill('FICTIONAL-BROWSER-RECEIPT')
-            page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] [name=verified]').check()
-            page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] button').click()
-            expect(page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] [name=amount]')).to_have_value('')
-            expect(page.locator('[data-account-workspace][data-scope=retail] [data-account-payment] button')).to_be_enabled()
-        paid = api(page, f"/api/shop/retail-orders/{order['id']}")['order']
-        assert paid['paymentTotals']['due'] == 0
-        assert len(paid['payments']) == 2
-        expect(page.locator('[data-account-workspace][data-scope=retail] [data-finance-panel]')).to_contain_text('FICTIONAL-BROWSER-RECEIPT')
+        expect(account.locator('[data-account-payment]')).to_be_visible()
+        # Pickup is already visible (disabled) before issuing stock. Wait for the
+        # acknowledged stock write and replacement account, not that old button.
+        previous_account = page.locator('#retailAccount').element_handle()
+        with page.expect_response(lambda response: urlparse(response.url).path == '/api/shop/inventory-adjustments' and response.request.method == 'POST') as issued_stock:
+            page.locator('[data-stock-sale]').click()
+        assert issued_stock.value.ok, issued_stock.value.text()
+        stock_payload = issued_stock.value.request.post_data_json
+        assert stock_payload['reason'] == 'sold' and stock_payload['quantityDelta'] == -1, stock_payload
+        page.wait_for_function('(previous) => !previous.isConnected', arg=previous_account)
+        expect(account.locator('[data-account-payment]')).to_be_visible()
+        expect(page.locator('[data-stock-sale]')).to_have_count(0)
+        order = api(page, order_path)['order']
+        assert order['lines'][0]['fulfillment']['fulfilledQuantity'] == 1, order['lines']
+        assert order['paymentTotals']['due'] == 10965 and not order['payments'], order
+        confirmed = 0
+        saved_ids = []
+        for index, (amount, cents, method) in enumerate([('50.00',5000,'cash'), ('59.65',5965,'card_dejavoo')], start=1):
+            form = account.locator('[data-account-payment]')
+            expect(form.locator('button')).to_be_enabled()
+            reference = 'FICTIONAL-BROWSER-RECEIPT-' + method.upper()
+            form.locator('[name=method]').select_option(method)
+            form.locator('[name=amount]').fill(amount)
+            form.locator('[name=reference]').fill(reference)
+            form.locator('[name=verified]').check()
+            previous_account = page.locator('#retailAccount').element_handle()
+            with page.expect_response(lambda response: urlparse(response.url).path == order_path + '/payments' and response.request.method == 'POST') as payment:
+                form.locator('button').click()
+            response = payment.value
+            assert response.status == 201, (response.status, response.text())
+            submitted = response.request.post_data_json
+            assert submitted['amount'] == amount and submitted['method'] == method, submitted
+            assert submitted['reference'] == reference and submitted['verified'] is True, submitted
+            result = response.json()
+            assert result['status'] == 'confirmed' and not result.get('duplicate'), result
+            confirmed += cents
+            assert result['totals']['paid'] == confirmed and result['totals']['due'] == 10965 - confirmed, result
+            saved_ids.append(result['id'])
+            paid = api(page, order_path)['order']
+            assert len(paid['payments']) == index and paid['paymentTotals']['due'] == 10965 - confirmed, paid
+            saved = next(row for row in paid['payments'] if row['id'] == result['id'])
+            assert (saved['amount_cents'], saved['method'], saved['status'], saved['reference']) == (cents, method, 'confirmed', reference), saved
+            # Payment refresh first replaces its inner workspace, then onChange
+            # replaces the entire counter-sale account. Wait for the final mount
+            # before entering another tender so no refresh can discard its inputs.
+            page.wait_for_function('(previous) => !previous.isConnected', arg=previous_account)
+            expect(account.locator('[data-finance-panel]')).to_contain_text(reference)
+            expect(account.locator('[data-account-payment] [name=amount]')).to_have_value('')
+            expect(account.locator('[data-account-payment] button')).to_be_enabled()
+        assert len(set(saved_ids)) == 2, saved_ids
         responsive(page, ARTIFACTS, no_overflow, 'counter-paid-ledger')
         page.locator('[data-status=picked_up]').click()
         page.wait_for_function("!document.querySelector('[data-status=picked_up]')")
         stock = api(page, '/api/shop/inventory')['stock']
         assert next(row['on_hand'] for row in stock if row['sku'] == 'REVIEW-SERVICE-KIT') == 2
-        assert api(page, f"/api/shop/retail-orders/{order['id']}")['order']['lines'][0]['status'] == 'picked_up'
-        receipt = page.request.get(base + f"/api/receipts/retail/{order['id']}", headers=session_headers(page))
+        assert api(page, order_path)['order']['lines'][0]['status'] == 'picked_up'
+        receipt = page.request.get(base + f'/api/receipts/retail/{order_id}', headers=session_headers(page))
         assert receipt.ok and 'text/html' in receipt.headers.get('content-type', '')
         page.remove_listener('dialog', accept_dialog)
         run_operations_journeys(page, base, ARTIFACTS, api, no_overflow)

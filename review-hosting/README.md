@@ -2,8 +2,10 @@
 
 This Worker relays ordinary HTTP requests to the actual Node/SQLite application.
 The Site remains owner-private and the local application still requires its own
-employee sign-in. Use a dedicated fictional review database and no live provider
-credentials. Stopping the managed runtime stops the application review.
+employee sign-in. The owner's private runtime may contain authorized shop data
+and provider configuration. Preserve it; never reset or seed it for testing.
+Use separate disposable fictional databases and no live credentials in tests.
+Stopping the managed runtime stops the application review.
 
 The Worker needs a `DB` D1 binding, the schema in `drizzle/0000_review_bridge.sql`,
 and a secret runtime variable named `REVIEW_BRIDGE_SECRET` of at least 32 random
@@ -36,3 +38,15 @@ journal. The hosting manifest declares `"d1": "DB"` and the registered Site ID.
 Sites provisions that logical binding and applies the schema before publication.
 Tests run with `npm test` in this directory. Preserve the registered ID, exact
 pushed source commit, owner-private audience and credential handling when publishing.
+
+The review app runs in a detached managed Docker container with private data and
+backup mounts. Its bridge receives credentials through hidden stdin after each
+container restart. A restart preserves the container's old proxy environment;
+if the managed session's proxy address changes, recreate the container using
+current Docker defaults and the same configuration/data mounts. Preserve CA
+trust and the explicit shop database path. Never substitute a new empty database.
+
+Use the origin returned by the latest successful Sites deployment and `get_site`.
+If hosting returns a changed origin, update the private application base URL and
+Calendar callback, then register that exact callback in Google Cloud before
+consent. Keep credentials restricted to the confirmed current Site origin.
