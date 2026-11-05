@@ -6,7 +6,9 @@ Updated 2026-11-05. Shop Desktop opens directly from the Windows launcher, with 
 
 Target account: jetskiarizona@gmail.com. The owner-supplied OAuth configuration has been installed privately in the review runtime. Owner Google consent is still pending. Drive account access and Calendar authorization are separate connections.
 
-Open Calendar, choose **Connect Google Calendar**, sign in as the target account and approve. Saving an appointment is local; **Sync to Google** explicitly publishes it. Once linked, rescheduling or cancelling the appointment updates its existing Google event with version/conflict protection. Existing unrelated Google events are not imported.
+The hosting service changed the review origin during preview.6 publication. In Google Cloud, add this exact Authorized redirect URI to the existing Web OAuth client first: `https://azjetski-ownertracker-review.coastliquidators.chatgpt.site/api/shop/google-calendar/callback`. The private runtime callback is updated; the downloaded original client JSON is retained unchanged.
+
+Then open Calendar, choose **Connect Google Calendar**, sign in as the target account and approve. Saving an appointment is local; **Sync to Google** explicitly publishes it. Once linked, rescheduling or cancelling the appointment updates its existing Google event with version/conflict protection. Existing unrelated Google events are not imported.
 
 For a separate Windows or permanent server installation:
 

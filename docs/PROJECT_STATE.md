@@ -8,7 +8,7 @@ Updated 2026-11-05. Read this first; load only the relevant source or bounded ha
 - Repository: https://github.com/blockaystudio/AzJetSki-Controller (main).
 - Preview.5 baseline: desktop Sales/Calendar shortcuts, scheduling customer creation/search, read-only recovered receipt archive, transactional customer importer and immutable original-ID history links.
 - Preview.6 verified: proxy-aware Google OAuth/API transport, explicit local appointment save, and pagination through all historical customer/receipt results. 307 tests/subtests, 111 syntax files and the repair/retail/scheduling plus legacy-pagination browser checks passed.
-- Owner-provided OAuth configuration is installed privately in review; owner Google consent remains pending. Drive connection does not authorize Calendar. No credentials belong in source, handoffs or planning snapshots.
+- Owner-provided OAuth configuration is installed privately in review; owner Google consent remains pending. The hosting service changed the origin on publication; the owner must add the current callback in Google Cloud first (see SHOP_DESKTOP_ROLLOUT.md). Drive connection does not authorize Calendar. No credentials belong in source, handoffs or planning snapshots.
 - Recovered customers and the historical archive are installed privately. Detailed reconciliation, source files and recovery identifiers stay outside GitHub. Active inventory/prices/opening balances still require reconciliation.
 
 ## Completed foundation
@@ -28,15 +28,15 @@ Updated 2026-11-05. Read this first; load only the relevant source or bounded ha
 
 ## Runtime and delivery
 
-- Owner-private review: https://azjetski-ownertracker-review.wholeclock.chatgpt.site ; desktop /desktop.html ; Calendar /shop-ops.html?tab=schedule.
+- Owner-private review: https://azjetski-ownertracker-review.coastliquidators.chatgpt.site ; desktop /desktop.html ; Calendar /shop-ops.html?tab=schedule.
 - Runtime is separate from source. Preserve private configuration, database, uploads, retained documents and backups on every update. The managed workspace must remain active.
 - Review app uses a managed Docker container with a private loopback port. The Site bridge takes credentials through hidden stdin; restarting the container requires bridge reinjection. Review hosting is temporary, not the permanent shop server.
 - Keep software releases free of real data/credentials. Install private data recovery separately; preserve original-ID mappings and the private archive path.
 
 ## Pending work and next gates
 
-1. Preview.6 verified locally; complete GitHub publication, private review refresh and desktop packaging. See the release follow-up for resulting commit and download.
-2. Owner completes Google consent from Calendar; verify explicit sync with a fictional appointment after approval.
+1. Preview.6 application commit d8b939b; verified 118-file desktop package and private review refreshed. See release follow-up for final download/publication status.
+2. Owner registers the current review callback in Google Cloud, then completes consent from Calendar; verify explicit sync with a fictional appointment after approval.
 3. Select hosting account and owned domain, provision using SERVER_DEPLOYMENT.md and establish stable HTTPS/callback.
 4. Reconcile active starting inventory/prices/balances, review migration exceptions and create named staff accounts.
 5. Actual register/phone/printer/drawer/barcode walkthrough, bank/terminal reconciliation, restart persistence and encrypted offsite restore.
