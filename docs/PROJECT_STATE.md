@@ -1,6 +1,6 @@
 # OwnerTracker — compact project checkpoint
 
-Updated 2026-11-05. Read this first; load only the relevant source or bounded handoff. GitHub is authoritative.
+Updated 2026-11-07. Read this first; load only the relevant source or bounded handoff. GitHub is authoritative.
 
 ## Goal and current application
 
@@ -10,6 +10,17 @@ Updated 2026-11-05. Read this first; load only the relevant source or bounded ha
 - Preview.6 verified: proxy-aware Google OAuth/API transport, explicit local appointment save, and pagination through all historical customer/receipt results. 307 tests/subtests, 111 syntax files and the repair/retail/scheduling plus legacy-pagination browser checks passed.
 - Owner-provided OAuth configuration is installed privately in review; owner Google consent remains pending. The hosting service changed the origin on publication; the owner must add the current callback in Google Cloud first (see SHOP_DESKTOP_ROLLOUT.md). Drive connection does not authorize Calendar. No credentials belong in source, handoffs or planning snapshots.
 - Recovered customers and the historical archive are installed privately. Detailed reconciliation, source files and recovery identifiers stay outside GitHub. Active inventory/prices/opening balances still require reconciliation.
+
+## Preview.7 shop arrival follow-up
+
+- Category dropdown and VIN-only vehicle forms; original historical identifiers preserved.
+- Configured assignment roster, separate from login credentials; active staff access is preserved.
+- Calendar arrivals prepare exact customer/vehicle intake, with atomic appointment/job linkage and safe replay.
+- Phone check-in: Dirt lot/Front lot, checklist, condition/keys/belongings, two required internal photos, durable drafts and retained completed identity. Assigned technicians are scoped to their own jobs.
+- Contactless profiles removed from the active directory using backup-first archival; receipts, jobs, vehicles and original-ID mappings remain retained. Operational counts/recovery details stay private.
+- Sol Ultra review corrected linked-photo privacy/immutability, silent custody reassignment, mobile save races and completed identity display. Legacy authorized custody API retained for integrations; current UI uses phone procedure.
+- Local suite: 349 tests/subtests, 125 syntax files and all legacy HTTP regressions passed. Final arrivals browser passed at390/768/1440; source manifest matched. Final full shop browser also passed with exact source-manifest match. Clean packaging/publication follows this accepted application state.
+- Handoffs: calendar_arrivals_2026-11-07, mobile_vehicle_checkin_2026-11-07, vehicle_forms_2026-11-07, arrivals_acceptance. No test mutations used actual shop data/providers.
 
 ## Completed foundation
 
@@ -35,7 +46,7 @@ Updated 2026-11-05. Read this first; load only the relevant source or bounded ha
 
 ## Pending work and next gates
 
-1. Completed: application d8b939b and release follow-up fc46c3e are published on main. Verified 118-file desktop ZIP: downloads/OwnerTracker-Desktop-preview6.zip. Private review HTTPS health returned200; existing business record counts match the pre-update backup.
+1. Preview.7 local acceptance and runtime configuration applied; finish clean package and publication. Previous preview.6 software is retained in downloads for recovery.
 2. Owner registers the current review callback in Google Cloud, then completes consent from Calendar; verify explicit sync with a fictional appointment after approval.
 3. Select hosting account and owned domain, provision using SERVER_DEPLOYMENT.md and establish stable HTTPS/callback.
 4. Reconcile active starting inventory/prices/balances, review migration exceptions and create named staff accounts.

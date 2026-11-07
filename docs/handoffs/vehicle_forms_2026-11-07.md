@@ -1,0 +1,9 @@
+# Vehicle form changes — 2026-11-07
+
+- Added shared `public/vehicle-fields.js` category dropdown: Personal watercraft (`PWC`, preserving the existing database value), Jet boat, Boat, ATV, UTV, Motorcycle, Other. Existing custom category values remain selected and escaped when editing.
+- Guided intake now collects VIN only. Restored HIN-only intake drafts carry their identifier into VIN, with any existing VIN taking precedence, and omit `hin` from new vehicle requests. Existing stored `hin` values and identifier display fallbacks remain intact.
+- Intake requests the configured assignment roster through `/api/staff?assignment=1`. Its arrival checkbox records intent and directs staff to the phone procedure after saving the repair. It performs no new physical check-in request and does not claim custody before that procedure completes.
+- Root owns customer vehicle editor integration. Calendar agent owns subsequent intake appointment prefill and exact linkage. Mobile procedure owns parking, keys, condition and photos.
+- Verified with Node 22.23.4: intake syntax and all 18 named intake tests passed at this subtask's initial milestone. Full `browser-shop.py` acceptance then passed twice with system Chromium against disposable fictional databases: category/VIN intake and directory editing, two full phone check-ins with synthetic before-service images, exact custody and scoped pickup, retained approvals/payment, plus existing retail/receiving/returns/close journeys at 390/768/1440 widths.
+- Final browser artifacts: `/tmp/ownertracker-vehicle-browser-final-20261107`. Post-run source manifest matches the final frozen `src`, `public` and `scripts` files. Dedicated calendar-prefill and privacy/rebinding tests belong to their owning agents' verification.
+- No review runtime, customer database, provider or schema mutations; no commits.

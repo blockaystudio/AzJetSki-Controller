@@ -1,6 +1,6 @@
 # Active shop development plan
 
-Updated 2026-11-05. One AZ Jet Ski shop; repairs and counter parts sales have equal priority. Use PROJECT_STATE.md for current status and bounded handoffs for implementation evidence.
+Updated 2026-11-07. One AZ Jet Ski shop; repairs and counter parts sales have equal priority. Use PROJECT_STATE.md for current status and bounded handoffs for implementation evidence.
 
 | Work | Status | Next gate |
 | --- | --- | --- |
@@ -14,6 +14,8 @@ Updated 2026-11-05. One AZ Jet Ski shop; repairs and counter parts sales have eq
 | Historical search/history pagination | Verified in preview.6 | Every matching record reachable; customer/query scopes and mobile paging pass |
 | Permanent Linux server package | Local container/recovery verification passed | Hosting account and owned domain still needed |
 | Permanent server provisioning | Pending owner setup | Provision selected host; public HTTPS, restart persistence, stable OAuth callback and offsite restore |
+| Vehicle forms, assignment roster and contact cleanup | Implemented in preview.7 | Category/VIN forms and backup-first archival; staff privately provision login access |
+| Calendar-prepared phone check-in | Implemented in preview.7 | Exact appointment intake, retained checklist/two photos and lot choices; actual phone/camera acceptance remains |
 | Shop pilot | Pending acceptance | Named staff, reconciled starting records, Windows/phone/peripherals and selected live providers |
 
 ## Delivery order

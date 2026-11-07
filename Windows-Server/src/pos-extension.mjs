@@ -1,3 +1,5 @@
+import {createAppointmentJob} from './calendar-intake.mjs';
+import {assertAssignmentStaff} from './shop-roster.mjs';
 import {makePurchaseTarget} from '../public/purchase-target.js';
 import {hasPurchaseBacking} from './purchase-policy.mjs';
 import {assertPurchaseAuthorized} from './shop-management.mjs';
@@ -192,6 +194,7 @@ export function posRoutes({db, currentUser, json, readBody, requireBridge, bridg
         return respond(201,{vehicle:db.prepare('SELECT * FROM vehicles WHERE id=?').get(Number(r.lastInsertRowid))});
       }
       const vm=p.match(/^\/api\/pos\/vehicles\/(\d+)$/);
+      if(vm&&req.method==='GET'){if(!requireRole(directoryRead))return deny('vehicle_read');const vehicle=db.prepare('SELECT * FROM vehicles WHERE id=? AND archived=0').get(Number(vm[1]));return vehicle?respond(200,{vehicle}):respond(404,{error:'Vehicle not found'});}
       if(vm&&req.method==='PATCH'){
         if(!requireRole(customerEdit))return deny('customer_edit');const id=Number(vm[1]),b=await body();
         transaction(db,()=>{
@@ -219,8 +222,8 @@ export function posRoutes({db, currentUser, json, readBody, requireBridge, bridg
         const {customer,vehicle,label}=woMeta(db,num(b.customer_id),num(b.vehicle_id));
         const stage=asText(b.stage)||'Intake';if(!validStages.has(stage))return respond(400,{error:'Invalid stage'});assertJobStageChange(null,stage);
         const ref=asText(b.ref_number,100)||`OT-${Date.now()}`;
-        const r=db.prepare(`INSERT INTO work_orders(source,ref_number,customer_id,vehicle_id,customer_name,phone,email,unit_label,year,make,model,serial,complaint,authorized_work,stage,estimate_total,paid_total,balance,date_opened,priority,tax_rate_bps) VALUES('manual',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,date('now'),?,?)`).run(ref,customer.id,vehicle.id,customer.name,customer.phone,customer.email,label,vehicle.year,vehicle.make,vehicle.model,vehicle.vin||vehicle.hin,asText(b.complaint),asText(b.authorized_work),stage,num(b.estimate_total),0,num(b.estimate_total),asText(b.priority)||'normal',shopTaxBps(db));
-        const id=Number(r.lastInsertRowid);db.prepare("UPDATE unit_custody SET work_order_id=? WHERE vehicle_id=? AND status='in_lot'").run(id,vehicle.id);audit(db,id,u,'Created work order',{ref,customerId:customer.id,vehicleId:vehicle.id});return respond(201,{id,ref_number:ref});
+        const create=()=>{const onsite=db.prepare("SELECT work_order_id FROM unit_custody WHERE vehicle_id=? AND status='in_lot'").get(vehicle.id);if(onsite?.work_order_id)throw Object.assign(Error('This vehicle is already checked in to another repair. Open its existing job before creating a new intake.'),{status:409});const r=db.prepare(`INSERT INTO work_orders(source,ref_number,customer_id,vehicle_id,customer_name,phone,email,unit_label,year,make,model,serial,complaint,authorized_work,stage,estimate_total,paid_total,balance,date_opened,priority,tax_rate_bps) VALUES('manual',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,date('now'),?,?)`).run(ref,customer.id,vehicle.id,customer.name,customer.phone,customer.email,label,vehicle.year,vehicle.make,vehicle.model,vehicle.vin||vehicle.hin,asText(b.complaint),asText(b.authorized_work),stage,num(b.estimate_total),0,num(b.estimate_total),asText(b.priority)||'normal',shopTaxBps(db));
+        const id=Number(r.lastInsertRowid);db.prepare("UPDATE unit_custody SET work_order_id=? WHERE vehicle_id=? AND status='in_lot' AND work_order_id IS NULL").run(id,vehicle.id);audit(db,id,u,'Created work order',{ref,customerId:customer.id,vehicleId:vehicle.id});return {id,ref_number:ref};};const result=b.appointment_id?createAppointmentJob(db,u,b.appointment_id,b,create):transaction(db,create);return respond(result.duplicate?200:201,result);
       }
       const wom=p.match(/^\/api\/pos\/work-orders\/(\d+)$/);
       if(wom&&req.method==='PATCH'){
@@ -243,6 +246,7 @@ export function posRoutes({db, currentUser, json, readBody, requireBridge, bridg
             identityChanged=assertJobIdentityChange(db,old,changes);
             db.prepare('UPDATE work_orders SET customer_id=?,vehicle_id=?,customer_name=?,phone=?,email=?,unit_label=?,year=?,make=?,model=?,serial=? WHERE id=?').run(m.customer.id,m.vehicle.id,m.customer.name,m.customer.phone,m.customer.email,m.label,m.vehicle.year,m.vehicle.make,m.vehicle.model,m.vehicle.vin||m.vehicle.hin,id);
           }
+          if(Object.hasOwn(b,'assigned_user_id')&&Number(b.assigned_user_id||0)!==Number(old.assigned_user_id||0))assertAssignmentStaff(db,b.assigned_user_id);
           if(orderCols.some(k=>Object.hasOwn(b,k)))updateCols(db,'work_orders',id,b,orderCols);
           if(Object.hasOwn(b,'estimate_total'))syncBalance(db,id);
           audit(db,id,u,identityChanged?'Job identity corrected':'Edited work order',identityChanged?{changes:b,before:identitySnapshot(old),after:identitySnapshot(db.prepare('SELECT * FROM work_orders WHERE id=?').get(id))}:b);

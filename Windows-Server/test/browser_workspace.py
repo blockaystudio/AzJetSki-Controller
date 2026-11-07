@@ -42,8 +42,11 @@ def fill_unit(page, suffix, *, lost_response=False, artifacts=None, no_overflow=
     page.get_by_role('button', name='Add a vehicle', exact=True).click()
     form = page.locator('#unitCreate')
     expect(form).to_be_visible()
+    expect(form.locator('select[name=category]')).to_be_visible()
+    form.locator('[name=category]').select_option('PWC')
+    expect(form.locator('[name=hin]')).to_have_count(0)
     for name, value in {'year':'2024','make':'Yamaha','model':'Browser VX ' + suffix,
-                        'hin':'FICTIONAL-BROWSER-' + suffix,'hours':'21.5','color':'Blue'}.items():
+                        'vin':'FICTIONAL-BROWSER-' + suffix,'hours':'21.5','color':'Blue'}.items():
         form.locator(f'[name={name}]').fill(value)
     if artifacts is not None and no_overflow is not None:
         responsive(page, artifacts, no_overflow, 'intake-unit-' + suffix.lower())
@@ -71,6 +74,34 @@ def fill_unit(page, suffix, *, lost_response=False, artifacts=None, no_overflow=
     expect(page.locator('#jobDetails')).to_be_visible()
 
 
+def phone_checkin(page, api, job, *, lot_location, keys_tag):
+    """Complete physical custody through the phone UI with synthetic photos."""
+    base = page.url.split('/', 3)[0] + '//' + page.url.split('/', 3)[2]
+    page.goto(base + f'/vehicle-checkin.html?workOrderId={job["id"]}')
+    form = page.locator('#checkinForm')
+    expect(form).to_be_visible()
+    expect(form.locator('[name=lotLocation] option')).to_have_text(['Choose a lot', 'Dirt lot', 'Front lot'])
+    form.locator('[name=lotLocation]').select_option(lot_location)
+    form.locator('[name=keysTag]').fill(keys_tag)
+    form.locator('[name=conditionNotes]').fill('Fictional walk-around: no visible damage; no belongings left.')
+    for name in ['identityConfirmed', 'exteriorReviewed', 'belongingsRecorded', 'keysRecorded']:
+        form.locator(f'[name={name}]').check()
+    # Images come from this fictional page, never from real customer/unit records.
+    image = page.locator('.checkin-identity').screenshot()
+    form.locator('#checkinCamera').set_input_files([
+        {'name':'fictional-front.png', 'mimeType':'image/png', 'buffer':image},
+        {'name':'fictional-rear.png', 'mimeType':'image/png', 'buffer':image}])
+    expect(page.locator('#photoCount')).to_contain_text('2 saved · 0 waiting', timeout=15000)
+    with page.expect_response(lambda r: '/api/vehicle-checkins/' in r.url and r.url.endswith('/complete') and r.request.method == 'POST') as completed:
+        form.get_by_role('button', name='Complete check-in', exact=True).click()
+    assert completed.value.ok, completed.value.text()
+    expect(page.get_by_role('heading', name='Vehicle check-in complete', exact=True)).to_be_visible()
+    custody = next(row for row in api(page, '/api/shop/queues')['inLot'] if row['vehicle_id'] == job['vehicle_id'])
+    assert custody['work_order_id'] == job['id']
+    assert custody['lot_location'] == lot_location
+    assert custody['keys_tag'] == keys_tag
+
+
 def finish_intake(page, api, artifacts, no_overflow, label, check_in):
     form = page.locator('#jobDetails')
     form.locator('[name=complaint]').fill('Fictional browser inspection: ' + label)
@@ -80,9 +111,6 @@ def finish_intake(page, api, artifacts, no_overflow, label, check_in):
     complete = page.locator('#completeIntake')
     expect(complete).to_be_visible()
     complete.locator('[name=checkIn]').set_checked(check_in)
-    if check_in:
-        complete.locator('[name=lotLocation]').fill('Fictional browser bay')
-        complete.locator('[name=keysTag]').fill('FICTIONAL-KEYS')
     responsive(page, artifacts, no_overflow, 'intake-review-' + label)
     with page.expect_response(lambda r: '/api/pos/work-orders' in r.url and r.request.method == 'POST') as created:
         complete.get_by_role('button', name='Create repair', exact=True).click()
@@ -94,12 +122,14 @@ def finish_intake(page, api, artifacts, no_overflow, label, check_in):
     assert float(job['estimate_total']) == 100.50
     lot = api(page, '/api/shop/queues')['inLot']
     custody = [row for row in lot if row['vehicle_id'] == job['vehicle_id']]
-    assert bool(custody) == check_in, custody
+    assert not custody, custody
     if check_in:
-        assert custody[0]['work_order_id'] == job_id
-        assert custody[0]['lot_location'] == 'Fictional browser bay'
-        assert custody[0]['keys_tag'] == 'FICTIONAL-KEYS'
-    page.locator('#intakeComplete').get_by_role('link', name='Open job', exact=True).click()
+        expect(page.locator('#intakeComplete').get_by_role('link', name='Continue to vehicle check-in', exact=True)).to_have_attribute(
+            'href', f'/vehicle-checkin.html?workOrderId={job_id}')
+        phone_checkin(page, api, job, lot_location='Front lot', keys_tag='FICTIONAL-KEYS')
+        page.get_by_role('link', name='Open repair', exact=True).click()
+    else:
+        page.locator('#intakeComplete').get_by_role('link', name='Open job', exact=True).click()
     expect(page.locator('#jobWorkspace')).to_be_visible()
     assert parse_qs(urlparse(page.url).query)['workOrderId'] == [str(job_id)]
     return job
@@ -126,6 +156,21 @@ def intake_journeys(page, base, artifacts, api, no_overflow):
     assert next(c for c in customers if c['id'] == customer_id)['name'] == 'Fictional Browser Customer'
     units = api(page, f'/api/pos/vehicles?customerId={customer_id}')['vehicles']
     assert len(units) == 1 and units[0]['id'] == first['vehicle_id']
+
+    # The customer directory and intake use the same vehicle choices and VIN label.
+    page.goto(base + '/?view=vehicles')
+    page.locator(f'[data-unit="{first["vehicle_id"]}"]').click()
+    edit = page.locator('#unitEdit')
+    expect(edit).to_be_visible()
+    expect(edit.locator('select[name=category] option')).to_have_text(
+        ['Personal watercraft', 'Jet boat', 'Boat', 'ATV', 'UTV', 'Motorcycle', 'Other'])
+    expect(edit.locator('[name=hin]')).to_have_count(0)
+    expect(edit.get_by_label('VIN', exact=True)).to_have_value('FICTIONAL-BROWSER-ONE')
+    edit.locator('[name=category]').select_option('Jet boat')
+    with page.expect_response(lambda r: r.url.endswith(f'/api/pos/vehicles/{first["vehicle_id"]}') and r.request.method == 'PATCH') as changed:
+        edit.get_by_role('button', name='Save Unit', exact=True).click()
+    assert changed.value.ok, changed.value.text()
+    assert changed.value.json()['vehicle']['category'] == 'Jet boat'
 
     # Search and select the same account. A second unit must not duplicate it.
     page.goto(base + '/intake.html')
@@ -437,16 +482,7 @@ def complete_repair_pickup(page, base, artifacts, api, no_overflow, first, secon
     assert current['snapshot']['estimateCents'] == 12575 and current['documentAvailable']
 
     # Two units from one customer are on site; release must select only one.
-    page.goto(base + '/shop-ops.html?tab=lot')
-    checkin = page.locator('#checkIn')
-    expect(checkin).to_be_visible()
-    checkin.locator('[name=vehicleId]').select_option(str(second['vehicle_id']))
-    checkin.locator('[name=workOrderId]').select_option(str(second['id']))
-    checkin.locator('[name=lotLocation]').fill('Fictional second-unit bay')
-    checkin.locator('[name=keysTag]').fill('FICTIONAL-SECOND-KEYS')
-    with page.expect_response(lambda r: r.url.endswith(f'/api/shop/vehicles/{second["vehicle_id"]}/check-in') and r.request.method == 'POST') as checked:
-        checkin.locator('button').click()
-    assert checked.value.ok, checked.value.text()
+    phone_checkin(page, api, second, lot_location='Dirt lot', keys_tag='FICTIONAL-SECOND-KEYS')
     queues = api(page, '/api/shop/queues')
     own_units = [row for row in queues['inLot'] if row['customer_id'] == first['customer_id']]
     assert {row['vehicle_id'] for row in own_units} == {first['vehicle_id'], second['vehicle_id']}

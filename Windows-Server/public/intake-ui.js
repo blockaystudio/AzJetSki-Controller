@@ -1,4 +1,5 @@
 import {dailyNavigation} from './shared-ui.js';
+import {vehicleCategoryField} from './vehicle-fields.js';
 
 export const intakeRoles = ['owner', 'manager', 'service_writer', 'advisor'];
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -6,13 +7,14 @@ const unitName = unit => [unit?.year, unit?.make, unit?.model].filter(Boolean).j
 const jobUrl = id => `/?view=workorders&workOrderId=${encodeURIComponent(id)}`;
 const blank = () => ({step:1, customer:null, unit:null, job:null, customerMode:'search', unitMode:'select', query:'', customerDraft:{state:'AZ',billing_state:'AZ',billing_same_as_service:true}, unitDraft:{category:'PWC'}, jobDraft:{estimate_total:'0.00',priority:'normal',assigned_user_id:''}, custodyDraft:{checkIn:false}, assignmentDone:false, checkinDone:false, complete:false, dirty:false, pending:null, uncertain:null});
 
-// The existing creation endpoints do not support idempotency keys. Persist each
-// accepted identity before the next operation, and never replay an uncertain write.
+// Persist each accepted identity before the next operation, and never replay an
+// uncertain write. Appointment repair creation also has a retained server link.
 export class IntakeSession {
   constructor({request, persist = () => {}, draft = {}}) {
     this.request = request;
     this.persist = persist;
-    this.state = {...blank(), ...draft};
+    this.state = {...blank(), ...draft, unitDraft:{...blank().unitDraft,...draft.unitDraft}};
+    this.state.unitDraft.vin ||= this.state.unitDraft.hin || '';
     this.busy = false;
     if (this.state.pending) {
       this.state.uncertain = {kind:this.state.pending, message:'The previous save did not return a confirmed result. Find the saved record before continuing.'};
@@ -21,6 +23,25 @@ export class IntakeSession {
   }
   save() { this.persist(this.state); }
   touch() { this.state.dirty = true; this.save(); }
+  applyAppointment(context) {
+    const s=this.state,a=context.appointment;
+    if(!Number.isSafeInteger(a?.id) || !context.canPrepare || !context.customer || Number(a.customer_id)!==Number(context.customer.id))
+      throw Error(context.blockedReason || 'Review this appointment’s saved customer before preparing intake.');
+    if(s.appointmentId && Number(s.appointmentId)!==a.id) throw Error('Another appointment intake is unfinished. Resume it before preparing this appointment.');
+    if(!s.appointmentId && (s.dirty || s.pending || s.uncertain || s.customer || s.unit || s.job)) throw Error('An unfinished repair intake is saved. Resume it before preparing this appointment.');
+    if(s.appointmentId) {
+      if(Number(s.customer?.id)!==context.customer.id || (a.vehicle_id && Number(s.unit?.id)!==Number(a.vehicle_id))) throw Error('This appointment changed customer or vehicle. Review its calendar record before continuing.');
+      if(s.job && context.linkedJob?.id!==s.job.id) throw Error('The saved repair no longer matches this appointment preparation.');
+      s.appointmentVehicleId=a.vehicle_id || null;
+      return;
+    }
+    if(context.linkedJob) throw Error('This appointment already has a saved repair. Open Scheduled arrivals to continue with that repair.');
+    if(a.vehicle_id && (!context.vehicle || Number(context.vehicle.id)!==Number(a.vehicle_id) || Number(context.vehicle.customer_id)!==context.customer.id)) throw Error('The appointment vehicle does not belong to this customer.');
+    s.appointmentId=a.id;s.appointmentCustomerId=context.customer.id;s.appointmentVehicleId=a.vehicle_id || null;
+    s.appointmentTitle=a.title;s.customer=context.customer;s.unit=context.vehicle || null;
+    s.step=s.unit ? 3 : 2;s.jobDraft={...s.jobDraft,complaint:a.notes || a.title};s.custodyDraft={checkIn:false};
+    this.touch();
+  }
   async run(action) {
     if (this.busy || this.state.uncertain || this.state.complete) return false;
     this.busy = true;
@@ -47,6 +68,7 @@ export class IntakeSession {
   }
   async createCustomer(body) {
     return this.run(async () => {
+      if(this.state.appointmentId) throw Error('Use the customer saved on this appointment.');
       await this.mutate('customer', '/api/pos/customers', body, result => {
         if (!Number.isSafeInteger(result.customer?.id)) throw Error('Customer save could not be confirmed.');
         this.state.customer = result.customer;
@@ -60,7 +82,13 @@ export class IntakeSession {
   async createUnit(body) {
     return this.run(async () => {
       if (!this.state.customer) throw Error('Choose a customer first.');
-      await this.mutate('unit', '/api/pos/vehicles', {...body, customer_id:this.state.customer.id}, result => {
+      if(this.state.appointmentVehicleId) throw Error('Use the vehicle saved on this appointment.');
+      if(this.state.appointmentId && Number(this.state.customer.id)!==Number(this.state.appointmentCustomerId)) throw Error('Use the customer saved on this appointment.');
+      const vehicle = {...body};
+      // An unfinished intake from an older version may still contain this field.
+      vehicle.vin ||= vehicle.hin || '';
+      delete vehicle.hin;
+      await this.mutate('unit', '/api/pos/vehicles', {...vehicle, customer_id:this.state.customer.id}, result => {
         if (!Number.isSafeInteger(result.vehicle?.id) || Number(result.vehicle.customer_id) !== this.state.customer.id) throw Error('Vehicle save could not be confirmed.');
         this.state.unit = result.vehicle;
         this.state.step = 3;
@@ -73,11 +101,18 @@ export class IntakeSession {
     return this.run(async () => {
       const s = this.state;
       if (!s.customer || !s.unit || Number(s.unit.customer_id) !== Number(s.customer.id)) throw Error('Choose this customer’s vehicle before creating the repair.');
+      if(s.appointmentId && (Number(s.customer.id)!==Number(s.appointmentCustomerId) || (s.appointmentVehicleId && Number(s.unit.id)!==Number(s.appointmentVehicleId)))) throw Error('Use this appointment’s exact customer and vehicle.');
       if (!s.job) {
+        if(s.appointmentId) {
+          const context=await this.request(`/api/shop/schedule/${s.appointmentId}/intake-context`);
+          if(!context.canPrepare || Number(context.customer?.id)!==Number(s.customer.id) || (context.appointment.vehicle_id && Number(context.appointment.vehicle_id)!==Number(s.unit.id))) throw Error(context.blockedReason || 'This appointment changed. Review its customer and vehicle in Scheduled arrivals.');
+          if(context.linkedJob) throw Error('This appointment already has a saved repair. Open Scheduled arrivals to continue with that repair.');
+        }
         s.jobRef ||= 'OT-' + crypto.randomUUID().slice(0, 8).toUpperCase();
         this.save();
-        await this.mutate('job', '/api/pos/work-orders', {...s.jobDraft, ref_number:s.jobRef, customer_id:s.customer.id, vehicle_id:s.unit.id}, result => {
+        await this.mutate('job', '/api/pos/work-orders', {...s.jobDraft, ref_number:s.jobRef, customer_id:s.customer.id, vehicle_id:s.unit.id,...(s.appointmentId ? {appointment_id:s.appointmentId} : {})}, result => {
           if (!Number.isSafeInteger(result.id)) throw Error('Repair save could not be confirmed.');
+          if(s.appointmentId && result.appointmentId!==s.appointmentId) throw Error('The appointment repair link could not be confirmed.');
           s.job = result;
           s.step = 4;
         });
@@ -100,7 +135,8 @@ export class IntakeSession {
         }
       } else s.assignmentDone = true;
       if (!s.checkinDone) {
-        // Job creation already attaches an on-site vehicle to the new repair.
+        // Reuse only the exact saved custody association. A different lot job
+        // must be reviewed before this intake can finish.
         const queues = await this.request('/api/shop/queues');
         const onSite = queues.inLot.find(row => Number(row.vehicle_id) === s.unit.id);
         if (onSite) {
@@ -110,13 +146,8 @@ export class IntakeSession {
           }
           s.checkinDone = true;
           s.onSite = onSite;
-        } else if (s.custodyDraft.checkIn) {
-          await this.mutate('checkin', `/api/shop/vehicles/${s.unit.id}/check-in`, {workOrderId:s.job.id,lotLocation:s.custodyDraft.lotLocation || '',keysTag:s.custodyDraft.keysTag || '',notes:s.custodyDraft.notes || ''}, result => {
-            if (result.status !== 'in_lot') throw Error('Check-in could not be confirmed.');
-            s.checkinDone = true;
-            s.onSite = {lot_location:s.custodyDraft.lotLocation,keys_tag:s.custodyDraft.keysTag};
-          });
         }
+        // New arrivals enter custody only after the phone check-in procedure.
       }
       s.complete = true;
       s.dirty = false;
@@ -175,6 +206,7 @@ export async function mountIntake(root) {
   const selectCustomer = async id => {
     const customer = (await read('/api/pos/customers/'+id)).customer;
     if (!customer || customer.archived) throw Error('This customer is unavailable. Search again.');
+    if(s().appointmentId && Number(customer.id)!==Number(s().appointmentCustomerId)) throw Error('Use the customer saved on this appointment.');
     if (s().customer?.id !== customer.id) { s().unit=null; s().unitDraft=blank().unitDraft; }
     s().customer=customer; s().customerMode='search'; s().uncertain=null; recovery=[];
     session.touch(); await goStep(2);
@@ -182,11 +214,12 @@ export async function mountIntake(root) {
   const selectUnit = id => {
     const unit = vehicles.find(row => Number(row.id)===Number(id));
     if (!unit || Number(unit.customer_id)!==s().customer.id) throw Error('Choose a vehicle belonging to this customer.');
+    if(s().appointmentVehicleId && Number(unit.id)!==Number(s().appointmentVehicleId)) throw Error('Use the vehicle saved on this appointment.');
     s().unit=unit; s().unitMode='select'; s().uncertain=null; recovery=[]; s().step=3; session.touch();
   };
   const buttons = (back, next) => `<div class="intake-actions">${back?`<button type="button" class="btn" data-back="${back}">Back</button>`:''}${next||''}</div>`;
   const customerResults = (rows, target='data-customer') => rows.map(c => `<button type="button" class="directory-row" ${target}="${c.id}"><strong>${esc(c.name)}</strong><span>${esc(c.phone || c.email || 'No contact recorded')}</span><span>${esc([c.address_line1,c.city,c.state,c.postal_code].filter(Boolean).join(', '))}</span></button>`).join('') || '<p class="empty">No matching customers. Check the name, phone, or email before adding a customer.</p>';
-  const unitResults = rows => rows.map(v => `<button type="button" class="directory-row" data-unit="${v.id}"><strong>${esc(unitName(v))}</strong><span>${esc(v.vin||v.hin||'No VIN / HIN recorded')}</span></button>`).join('') || '<p class="empty">No vehicles saved for this customer yet.</p>';
+  const unitResults = rows => rows.map(v => `<button type="button" class="directory-row" data-unit="${v.id}"><strong>${esc(unitName(v))}</strong><span>${esc(v.vin||v.hin||'No VIN recorded')}</span></button>`).join('') || '<p class="empty">No vehicles saved for this customer yet.</p>';
   function customerStep() {
     if (s().customerMode === 'new') {
       const c=s().customerDraft;
@@ -197,9 +230,9 @@ export async function mountIntake(root) {
   function unitStep() {
     if (s().unitMode === 'new') {
       const v=s().unitDraft;
-      return `<h2 id="stepHeading" tabindex="-1">2. Add a vehicle</h2><p>Owned by ${esc(s().customer.name)}.</p><form id="unitCreate"><div class="form-grid">${field('Type / category','category',v.category,'required')}${field('Year','year',v.year,'inputmode="numeric" maxlength="4"')}${field('Make','make',v.make,'required')}${field('Model','model',v.model,'required')}${field('VIN','vin',v.vin,'autocomplete="off"')}${field('HIN','hin',v.hin,'autocomplete="off"')}${field('Hours','hours',v.hours,'type="number" min="0" step="0.1" inputmode="decimal"')}${field('Mileage','mileage',v.mileage,'type="number" min="0" step="0.1" inputmode="decimal"')}${field('Color','color',v.color)}</div>${buttons(2,'<button class="btn primary">Save vehicle &amp; continue</button>')}</form>`;
+      return `<h2 id="stepHeading" tabindex="-1">2. Add a vehicle</h2><p>Owned by ${esc(s().customer.name)}.</p><form id="unitCreate"><div class="form-grid">${vehicleCategoryField(v.category)}${field('Year','year',v.year,'inputmode="numeric" maxlength="4"')}${field('Make','make',v.make,'required')}${field('Model','model',v.model,'required')}${field('VIN','vin',v.vin,'autocomplete="off"')}${field('Hours','hours',v.hours,'type="number" min="0" step="0.1" inputmode="decimal"')}${field('Mileage','mileage',v.mileage,'type="number" min="0" step="0.1" inputmode="decimal"')}${field('Color','color',v.color)}</div>${buttons(2,'<button class="btn primary">Save vehicle &amp; continue</button>')}</form>`;
     }
-    return `<h2 id="stepHeading" tabindex="-1">2. Choose vehicle</h2><p>Vehicles owned by ${esc(s().customer.name)}. Choose the machine arriving for this repair.</p><div id="unitChoices">${unitResults(vehicles)}</div>${buttons(1,'<button class="btn primary" type="button" id="newUnit">Add a vehicle</button>')}`;
+    return `<h2 id="stepHeading" tabindex="-1">2. Choose vehicle</h2><p>Vehicles owned by ${esc(s().customer.name)}. Choose the machine arriving for this repair.</p><div id="unitChoices">${unitResults(vehicles)}</div>${buttons(s().appointmentId?null:1,s().appointmentVehicleId?'':'<button class="btn primary" type="button" id="newUnit">Add a vehicle</button>')}`;
   }
   function jobStep() {
     const j=s().jobDraft;
@@ -207,7 +240,8 @@ export async function mountIntake(root) {
   }
   function reviewStep() {
     const onSite=lot.find(row=>Number(row.vehicle_id)===s().unit.id), d=s().custodyDraft, assigned=staff.find(u=>String(u.id)===String(s().jobDraft.assigned_user_id));
-    return `<h2 id="stepHeading" tabindex="-1">4. Review &amp; check in</h2><dl class="intake-summary"><dt>Customer complaint</dt><dd>${esc(s().jobDraft.complaint)}</dd><dt>Basic estimate</dt><dd>${new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(Number(s().jobDraft.estimate_total)||0)}</dd><dt>Assigned employee</dt><dd>${esc(assigned?.displayName||assigned?.username||'Unassigned')}</dd><dt>Priority</dt><dd>${esc(s().jobDraft.priority)}</dd></dl>${s().job?`<p class="success">Repair ${esc(s().job.ref_number)} is saved. Continue to finish the remaining intake steps.</p><p><a href="${jobUrl(s().job.id)}">Open saved job</a></p>`:''}<form id="completeIntake">${onSite?`<p class="notice">Already checked in${onSite.lot_location?' at '+esc(onSite.lot_location):''}${onSite.keys_tag?' · Key '+esc(onSite.keys_tag):''}. The saved repair will use this existing check-in.</p>`:`<label class="check-row"><input type="checkbox" name="checkIn" ${d.checkIn?'checked':''} ${s().checkinDone?'disabled':''}> Vehicle is here — check in now</label><fieldset class="address-fieldset" id="checkinFields" ${d.checkIn?'':'hidden'}><legend>Physical check-in</legend><div class="form-grid">${field('Lot parking location','lotLocation',d.lotLocation,'maxlength="80"')}${field('Key tag','keysTag',d.keysTag,'maxlength="80"')}</div><label class="field">Condition notes<textarea name="notes">${esc(d.notes)}</textarea></label></fieldset>`}${buttons(s().job?null:3,`<button class="btn primary">${s().job?'Finish saved repair intake':'Create repair'}</button>`)}</form>`;
+    const otherLotJob=onSite?.work_order_id && Number(onSite.work_order_id)!==Number(s().job?.id);
+    return `<h2 id="stepHeading" tabindex="-1">4. Review &amp; check in</h2><dl class="intake-summary"><dt>Customer complaint</dt><dd>${esc(s().jobDraft.complaint)}</dd><dt>Basic estimate</dt><dd>${new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(Number(s().jobDraft.estimate_total)||0)}</dd><dt>Assigned employee</dt><dd>${esc(assigned?.displayName||assigned?.username||'Unassigned')}</dd><dt>Priority</dt><dd>${esc(s().jobDraft.priority)}</dd></dl>${s().job?`<p class="success">Repair ${esc(s().job.ref_number)} is saved. Continue to finish the remaining intake steps.</p><p><a href="${jobUrl(s().job.id)}">Open saved job</a></p>`:''}<form id="completeIntake">${onSite?`<p class="notice">Already checked in${onSite.lot_location?' at '+esc(onSite.lot_location):''}${onSite.keys_tag?' · Key '+esc(onSite.keys_tag):''}. ${otherLotJob?`This vehicle is on site for another saved repair. <a href="${jobUrl(onSite.work_order_id)}">Open the existing lot job</a> before continuing.`:'The exact saved lot association will be retained.'}</p>`:`<label class="check-row"><input type="checkbox" name="checkIn" ${d.checkIn?'checked':''} ${s().checkinDone?'disabled':''}> Vehicle is here — continue to phone check-in</label><p class="notice" id="checkinFields" ${d.checkIn?'':'hidden'}>Create the repair, then use the phone check-in procedure to record parking, keys, condition, and photos.</p>`}${buttons(s().job?null:3,`<button class="btn primary" ${otherLotJob?'disabled':''}>${s().job?'Finish saved repair intake':'Create repair'}</button>`)}</form>`;
   }
   function recoveryPanel() {
     const issue=s().uncertain, labels={customer:'Find saved customer',unit:'Find saved vehicle',job:'Find saved repair',assignment:'Check saved assignment',checkin:'Check lot status'};
@@ -215,7 +249,7 @@ export async function mountIntake(root) {
   }
   function render() {
     const state=s();
-    root.innerHTML=`<header class="topbar"><div class="brand"><img class="header-logo" src="/brand-logo.png" alt="AZ Jet Ski + Powersports">Owner <span>Tracker</span></div><span class="user-chip">${esc(me.user.displayName)} · ${esc(me.user.role.replaceAll('_',' '))}</span></header><main class="container intake-workspace">${dailyNavigation(me.user.role,'intake')}<div class="page-title"><div><h1>New Repair / Check In</h1><p class="muted">Customer, vehicle, service request, and arrival in one place.</p></div>${!state.complete?'<button class="btn" id="cancelIntake" type="button">Cancel intake</button>':''}</div><ol class="intake-steps" aria-label="Intake progress">${['Customer','Vehicle','Service request','Review & check in'].map((name,index)=>`<li class="${index+1===state.step?'current':index+1<state.step?'completed':''}" ${index+1===state.step?'aria-current="step"':''}>${name}${index+1<state.step?' — complete':''}</li>`).join('')}</ol>${state.customer?`<section class="intake-summary card" aria-label="Selected customer and vehicle"><strong>${esc(state.customer.name)}</strong><span>${esc(state.customer.phone||state.customer.email||'')}</span>${state.unit?`<strong>${esc(unitName(state.unit))}</strong><span>${esc(state.unit.vin||state.unit.hin||'')}</span>`:''}</section>`:''}<div id="intakeMessage" tabindex="-1" role="${message?'alert':'status'}" class="${message?'operation-notice':''}">${esc(message)}</div><section class="card section" id="intakeStep">${state.complete?`<div id="intakeComplete"><h2 tabindex="-1" id="stepHeading">Repair ${esc(state.job.ref_number)} created</h2><p>${state.onSite?'Vehicle is checked in'+(state.onSite.lot_location?' at '+esc(state.onSite.lot_location):'')+(state.onSite.keys_tag?' · Key '+esc(state.onSite.keys_tag):'')+'.':'Vehicle was not checked in. Check it in when it arrives.'}</p><a class="btn primary" href="${jobUrl(state.job.id)}">Open job</a> <a class="btn" href="/intake.html">Start another repair</a></div>`:state.uncertain?recoveryPanel():({1:customerStep,2:unitStep,3:jobStep,4:reviewStep}[state.step]||customerStep)()}</section></main>`;
+    root.innerHTML=`<header class="topbar"><div class="brand"><img class="header-logo" src="/brand-logo.png" alt="AZ Jet Ski + Powersports">Owner <span>Tracker</span></div><span class="user-chip">${esc(me.user.displayName)} · ${esc(me.user.role.replaceAll('_',' '))}</span></header><main class="container intake-workspace">${dailyNavigation(me.user.role,'intake')}<div class="page-title"><div><h1>New Repair / Check In</h1><p class="muted">Customer, vehicle, service request, and arrival in one place.</p></div>${!state.complete?'<button class="btn" id="cancelIntake" type="button">Cancel intake</button>':''}</div><ol class="intake-steps" aria-label="Intake progress">${['Customer','Vehicle','Service request','Review & check in'].map((name,index)=>`<li class="${index+1===state.step?'current':index+1<state.step?'completed':''}" ${index+1===state.step?'aria-current="step"':''}>${name}${index+1<state.step?' — complete':''}</li>`).join('')}</ol>${state.customer?`<section class="intake-summary card" aria-label="Selected customer and vehicle"><strong>${esc(state.customer.name)}</strong><span>${esc(state.customer.phone||state.customer.email||'')}</span>${state.unit?`<strong>${esc(unitName(state.unit))}</strong><span>${esc(state.unit.vin||state.unit.hin||'')}</span>`:''}</section>`:''}${state.appointmentId?`<p class="notice">Preparing appointment: ${esc(state.appointmentTitle)}. The customer${state.appointmentVehicleId?' and vehicle are':' is'} fixed to this appointment. Preparation does not check in a vehicle. <a href="/calendar-arrivals.html">Scheduled arrivals</a></p>`:''}<div id="intakeMessage" tabindex="-1" role="${message?'alert':'status'}" class="${message?'operation-notice':''}">${esc(message)}</div><section class="card section" id="intakeStep">${state.complete?`<div id="intakeComplete"><h2 tabindex="-1" id="stepHeading">Repair ${esc(state.job.ref_number)} created</h2><p>${state.onSite?'Vehicle is checked in'+(state.onSite.lot_location?' at '+esc(state.onSite.lot_location):'')+(state.onSite.keys_tag?' · Key '+esc(state.onSite.keys_tag):'')+'.':state.custodyDraft.checkIn?'Complete the phone check-in procedure to record this vehicle’s arrival.':'Vehicle was not checked in. Complete the phone check-in procedure when it arrives.'}</p>${!state.onSite?`<p><a class="btn primary" href="/vehicle-checkin.html?workOrderId=${state.job.id}${state.appointmentId?'&appointmentId='+state.appointmentId:''}">${state.custodyDraft.checkIn?'Continue to vehicle check-in':'Check in vehicle when it arrives'}</a></p>`:''}<a class="btn primary" href="${jobUrl(state.job.id)}">Open job</a> <a class="btn" href="/intake.html">Start another repair</a></div>`:state.uncertain?recoveryPanel():({1:customerStep,2:unitStep,3:jobStep,4:reviewStep}[state.step]||customerStep)()}</section></main>`;
     bind();
     root.querySelector(message?'#intakeMessage':'#recoveryHeading, #stepHeading')?.focus();
   }
@@ -223,7 +257,7 @@ export async function mountIntake(root) {
     const get=selector=>root.querySelector(selector), on=(selector,event,handler)=>{const node=get(selector);if(node)node[event]=handler;};
     on('#cancelIntake','onclick',()=>{if(canLeave()){clearDraft();location.href='/';}});
     root.querySelectorAll('[data-back]').forEach(button=>button.onclick=act(async()=>{
-      const target=Number(button.dataset.back);
+      const target=s().appointmentId?Math.max(2,Number(button.dataset.back)):Number(button.dataset.back);
       if(target===1&&s().customerMode==='new')s().customerMode='search';
       if(target===2&&s().unitMode==='new')s().unitMode='select';
       await goStep(target);
@@ -260,7 +294,10 @@ export async function mountIntake(root) {
       const kind=s().uncertain.kind;
       if(kind==='customer')recovery=(await read('/api/pos/customers?q='+encodeURIComponent(s().query||s().customerDraft.name||''))).customers;
       if(kind==='unit')recovery=(await read(`/api/pos/vehicles?customerId=${s().customer.id}`)).vehicles;
-      if(kind==='job')recovery=(await read('/api/pos/customers/'+s().customer.id)).customer.workOrders.filter(w=>Number(w.vehicle_id)===s().unit.id&&w.ref_number===s().jobRef);
+      if(kind==='job'){
+        if(s().appointmentId){const context=await read(`/api/shop/schedule/${s().appointmentId}/intake-context`);recovery=context.linkedJob&&context.canPrepare&&Number(context.linkedJob.customer_id)===s().customer.id&&Number(context.linkedJob.vehicle_id)===s().unit.id&&context.linkedJob.ref_number===s().jobRef?[context.linkedJob]:[];}
+        else recovery=(await read('/api/pos/customers/'+s().customer.id)).customer.workOrders.filter(w=>Number(w.vehicle_id)===s().unit.id&&w.ref_number===s().jobRef);
+      }
       if(kind==='assignment'){
         currentAssignment=(await read(`/api/work-orders/${s().job.id}`)).workOrder;
         if(Number(currentAssignment.assigned_user_id)===Number(s().jobDraft.assigned_user_id)){s().assignmentDone=true;s().uncertain=null;message='The requested assignment is saved. Continue to finish intake.';}
@@ -295,17 +332,21 @@ export async function mountIntake(root) {
       storageKey='ownertracker:intake:'+me.user.id;
       let draft={};try{draft=JSON.parse(sessionStorage.getItem(storageKey)||'{}');}catch{}
       session=new IntakeSession({request:intakeRequest,persist,draft});
-      const results=await Promise.all([read('/api/staff'),read('/api/shop/queues')]);
+      const results=await Promise.all([read('/api/staff?assignment=1'),read('/api/shop/queues')]);
       staff=results[0].users.filter(user=>user.active);lot=results[1].inLot;
-      const params=new URLSearchParams(location.search),customerId=params.get('customerId'),vehicleId=params.get('vehicleId');
-      if(!s().customer&&!s().uncertain&&/^\d+$/.test(customerId||'')){
+      const params=new URLSearchParams(location.search),customerId=params.get('customerId'),vehicleId=params.get('vehicleId'),appointmentId=params.get('appointmentId') || s().appointmentId;
+      if(appointmentId){
+        if(!/^\d+$/.test(String(appointmentId)))throw Error('Choose a valid saved appointment from Scheduled arrivals.');
+        session.applyAppointment(await read(`/api/shop/schedule/${Number(appointmentId)}/intake-context`));
+        await readVehicles();
+      }else if(!s().customer&&!s().uncertain&&/^\d+$/.test(customerId||'')){
         await selectCustomer(Number(customerId));
         if(/^\d+$/.test(vehicleId||'')&&vehicles.some(v=>Number(v.id)===Number(vehicleId)))selectUnit(Number(vehicleId));
       }else if(s().customer)await readVehicles();
       await searchCustomers();
       if(draft.dirty)message='Your unfinished intake has been restored. Review the saved selections before continuing.';
       render();
-    }catch(error){root.innerHTML=`<main class="container"><section class="card"><h1>Unable to load repair intake</h1><p role="alert">${esc(error.message)}</p><button id="retryIntake" class="btn">Reload intake</button> <a href="/">Return to workspace</a></section></main>`;root.querySelector('#retryIntake').onclick=start;}
+    }catch(error){root.innerHTML=`<main class="container"><section class="card"><h1>Unable to load repair intake</h1><p role="alert">${esc(error.message)}</p><button id="retryIntake" class="btn">Reload intake</button> <a href="/intake.html">Resume unfinished intake</a> · <a href="/calendar-arrivals.html">Scheduled arrivals</a> · <a href="/">Return to workspace</a></section></main>`;root.querySelector('#retryIntake').onclick=start;}
   }
   addEventListener('beforeunload',event=>{if(session?.state.dirty&&!session.state.complete){event.preventDefault();event.returnValue='';}});
   root.addEventListener('click',event=>{

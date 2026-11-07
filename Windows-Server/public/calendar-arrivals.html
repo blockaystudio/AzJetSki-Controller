@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b1018">
+  <title>Scheduled Arrivals · Owner Tracker</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/ui-foundation.css">
+  <style>
+    .arrivals-date,.arrival-actions{display:flex;flex-wrap:wrap;align-items:end;gap:12px}.arrivals-date .field{margin:0;min-width:190px}.arrival-list{display:grid;gap:18px;margin-top:20px}.arrival{padding:20px;min-width:0}.arrival h2{margin-top:0}.arrival p,.arrival dd,.arrival a{overflow-wrap:anywhere}.arrival dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 16px}.arrival dd{margin:0}.arrival-jobs{display:grid;gap:10px;margin:14px 0}.arrival-jobs button{text-align:left;white-space:normal;padding:14px;min-height:48px}.arrival-jobs strong,.arrival-jobs span{display:block}.arrival-note{white-space:pre-wrap}.arrivals-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px}.arrivals-date button,.arrival-actions a{min-height:44px}@media(max-width:540px){.arrival{padding:16px}.arrival dl{grid-template-columns:1fr;gap:4px}.arrival dd{margin-bottom:8px}.arrivals-date .field{width:100%}.arrival-actions{align-items:stretch}.arrival-actions a{flex:1 1 100%;text-align:center}}
+  </style>
+</head>
+<body>
+  <div id="calendarArrivals" class="app"><main class="container"><p role="status">Loading scheduled arrivals…</p></main></div>
+  <script type="module" src="/calendar-arrivals.js"></script>
+</body>
+</html>

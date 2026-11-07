@@ -67,6 +67,7 @@ jobs:
         run: |
           python Windows-Server/test/browser-shop.py
           python Windows-Server/test/browser-legacy.py
+          python Windows-Server/test/browser-arrivals.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -1,6 +1,6 @@
 # Shop desktop and scheduling rollout
 
-Updated 2026-11-05. Shop Desktop opens directly from the Windows launcher, with Sales / POS, Calendar, Customers / Units, Repairs, Accounts and Previous POS History shortcuts. Scheduling supports directory search and customer creation without requiring a vehicle or repair job.
+Updated 2026-11-07. Shop Desktop opens directly from the Windows launcher, with Sales / POS, Calendar, Customers / Units, Repairs, Accounts and Previous POS History shortcuts. Scheduling supports directory search and customer creation without requiring a vehicle or repair job.
 
 ## Google Calendar
 
@@ -37,3 +37,13 @@ Install the current software package separately from the private data restore. T
 - Confirm drawer/printer/barcode behavior, restart persistence and a restore from an encrypted offsite copy with its separately held key.
 
 Do not record these owner/provider/device checks as complete based only on automated application tests. Manual terminal references and supplier ordering remain supported initial workflows.
+
+## Preview.7 — shop arrival workflow
+
+Vehicle creation and editing use a category dropdown and a single VIN field. Original stored identifiers remain available for historical records. Assignment choices are configured separately from login access; Tyler Whitener and Jacobo Medina are the shop roster. Existing staff credentials and roles are preserved. For newly configured employee records, the owner sets private login credentials through staff administration when needed. No shared/default employee password is supplied.
+
+From Desktop or Calendar, choose **Prepare scheduled check-ins** and the Arizona calendar day. An appointment can open an exact existing repair or prepare intake for its original customer and vehicle. A prepared appointment is not a physical arrival. Saving a new appointment-linked repair is transactional and retry-safe. This reads the app schedule; it does not import unrelated Google events. The Google consent/callback gate above remains separate.
+
+On the phone, open **Phone check-in / photos** from the job or lot workspace. Confirm customer, vehicle and VIN, choose **Dirt lot** or **Front lot**, record keys (or No keys), condition and belongings, complete the four inspection confirmations, and take at least two arrival photos. Drafts and queued photos retain retry keys. The vehicle enters the lot only after **Complete check-in** succeeds. Completed records and internal check-in photos are retained; later profile edits do not relabel the completed identity. Assigned technicians can perform the procedure for their own jobs. New UI entry points use this workflow; the prior authorized staff custody API remains for integration compatibility.
+
+Customer cleanup is backup-first and archive-only. It removes an active profile only when every phone, email and service/billing address field is blank, and keeps original IDs, receipts, work orders and vehicle links. A partial contact value is retained for review. CLI commands default to a non-writing preview and require explicit --apply. Keep operational cleanup reports and backups private.
