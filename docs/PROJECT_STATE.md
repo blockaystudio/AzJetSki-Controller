@@ -19,7 +19,7 @@ Updated 2026-11-07. Read this first; load only the relevant source or bounded ha
 - Phone check-in: Dirt lot/Front lot, checklist, condition/keys/belongings, two required internal photos, durable drafts and retained completed identity. Assigned technicians are scoped to their own jobs.
 - Contactless profiles removed from the active directory using backup-first archival; receipts, jobs, vehicles and original-ID mappings remain retained. Operational counts/recovery details stay private.
 - Sol Ultra review corrected linked-photo privacy/immutability, silent custody reassignment, mobile save races and completed identity display. Legacy authorized custody API retained for integrations; current UI uses phone procedure.
-- Local suite: 349 tests/subtests, 125 syntax files and all legacy HTTP regressions passed. Final arrivals browser passed at390/768/1440; source manifest matched. Final full shop browser also passed with exact source-manifest match. Clean packaging/publication follows this accepted application state.
+- Local suite: 349 tests/subtests, 125 syntax files and all legacy HTTP regressions passed. Final arrivals browser passed at390/768/1440; source manifest matched. Final full shop browser also passed with exact source-manifest match. Verified130-file software package built; runtime refreshed with private configuration/data preserved.
 - Handoffs: calendar_arrivals_2026-11-07, mobile_vehicle_checkin_2026-11-07, vehicle_forms_2026-11-07, arrivals_acceptance. No test mutations used actual shop data/providers.
 
 ## Completed foundation
@@ -46,7 +46,7 @@ Updated 2026-11-07. Read this first; load only the relevant source or bounded ha
 
 ## Pending work and next gates
 
-1. Preview.7 local acceptance and runtime configuration applied; finish clean package and publication. Previous preview.6 software is retained in downloads for recovery.
+1. Preview.7 application c48e197; verified130-file downloads/OwnerTracker-Desktop-preview7.zip and private runtime updated. Previous software and private pre-change backups retained for recovery. GitHub/Drive publication follows this checkpoint.
 2. Owner registers the current review callback in Google Cloud, then completes consent from Calendar; verify explicit sync with a fictional appointment after approval.
 3. Select hosting account and owned domain, provision using SERVER_DEPLOYMENT.md and establish stable HTTPS/callback.
 4. Reconcile active starting inventory/prices/balances, review migration exceptions and create named staff accounts.
